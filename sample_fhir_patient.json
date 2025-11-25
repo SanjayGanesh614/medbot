@@ -1,0 +1,65 @@
+{
+  "resourceType": "Patient",
+  "id": "example-001",
+  "gender": "male",
+  "birthDate": "1955-07-15",
+  "medicationRequest": [
+    {
+      "medicationCodeableConcept": {
+        "text": "METFORMIN",
+        "coding": [
+          {
+            "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
+            "code": "6809",
+            "display": "Metformin"
+          }
+        ]
+      }
+    },
+    {
+      "medicationCodeableConcept": {
+        "text": "LISINOPRIL",
+        "coding": [
+          {
+            "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
+            "code": "29046",
+            "display": "Lisinopril"
+          }
+        ]
+      }
+    },
+    {
+      "medicationCodeableConcept": {
+        "text": "ATORVASTATIN",
+        "coding": [
+          {
+            "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
+            "code": "83367",
+            "display": "Atorvastatin"
+          }
+        ]
+      }
+    }
+  ],
+  "observation": [
+    {
+      "code": {
+        "text": "Creatinine"
+      },
+      "valueQuantity": {
+        "value": 1.2,
+        "unit": "mg/dL"
+      }
+    },
+    {
+      "code": {
+        "text": "Hemoglobin"
+      },
+      "valueQuantity": {
+        "value": 13.5,
+        "unit": "g/dL"
+      }
+    }
+  ]
+}
+
