@@ -1,0 +1,41 @@
+How to preprocess and train (AI-CPA + VigiFlow)
+-----------------------------------------------
+
+Prereqs
+1) Conda on PATH.
+2) Project root: D:\lame\medbot
+3) VigiFlow Excel present: D:\lame\medbot\VigiFlow_Excel_15102025_104021.xlsx
+
+Environment (one time)
+1) Create env (already exists here):
+   conda create -y -p D:\lame\medbot\.conda-env python=3.11
+2) Install deps:
+   conda install -y -p D:\lame\medbot\.conda-env -c conda-forge pandas numpy scikit-learn imbalanced-learn xgboost shap joblib streamlit plotly matplotlib seaborn openpyxl
+
+Activate for a session
+   conda activate D:\lame\medbot\.conda-env
+   (or prefix commands with: conda run -p D:\lame\medbot\.conda-env ...)
+
+AI-CPA pipeline (MIMIC/FAERS data)
+1) Preprocess to build feature/target CSVs:
+   conda run -p D:\lame\medbot\.conda-env python src\preprocess.py
+   Outputs: data\output\X_features.csv, y_target.csv, merged_dataset.csv
+2) Train main model with class balancing:
+   conda run -p D:\lame\medbot\.conda-env python src\train_xgb.py
+   Artifacts: models\xgb_adr_model.pkl (+ metadata), reports\*.png/csv
+
+VigiFlow pharmacovigilance pipeline (Excel 80/20 split)
+1) From project root:
+   conda run -p D:\lame\medbot\.conda-env python train_vigiflow.py
+2) Outputs:
+   - Model pipeline: models\vigiflow_model.pkl
+   - Train split: data\output\vigiflow_train_split.csv
+   - Validation split: data\output\vigiflow_val_split.csv
+3) Latest validation stats (current run):
+   - ROC-AUC: 1.000
+   - Serious=No: Precision 0.972 | Recall 1.000 | F1 0.986
+   - Serious=Yes: Precision 1.000 | Recall 0.750 | F1 0.857
+   - Weighted Avg: Precision 0.975 | Recall 0.974 | F1 0.972
+
+Deactivate env when done
+   conda deactivate
