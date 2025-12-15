@@ -705,9 +705,8 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-@st.cache_resource
 def load_model_and_explainer():
-    """Load model and SHAP explainer (cached)"""
+    """Load model and SHAP explainer (uncached for real-time updates)"""
     try:
         model = load_model("models/xgb_adr_model.pkl")
         explainer = SHAPExplainer(model=model)
@@ -809,63 +808,204 @@ def page_patient_entry():
     
     if input_method == "Manual Entry":
         with st.form("patient_form"):
-            st.subheader("Patient Information")
-            
-            col1, col2 = st.columns(2)
+            st.subheader("👤 Patient Demographics")
+            col1, col2, col3, col4 = st.columns(4)
             
             with col1:
-                age = st.number_input("Age", min_value=18, max_value=120, value=65)
-                gender = st.selectbox("Gender", ["M", "F"])
+                age = st.number_input("Age (years)", min_value=18, max_value=120, value=65)
+                gender = st.selectbox("Sex", ["M", "F"])
                 
             with col2:
-                num_comorbidities = st.number_input("Number of Comorbidities", min_value=0, max_value=20, value=3)
+                weight = st.number_input("Weight (kg)", min_value=30.0, max_value=200.0, value=70.0, step=0.1)
+                height = st.number_input("Height (cm)", min_value=100.0, max_value=220.0, value=170.0, step=0.1)
                 
-            st.subheader("Prescribed Medications")
-            drugs = load_drug_list()
-            selected_drugs = st.multiselect(
-                "Select Medications", 
-                drugs,
-                help="Select all medications currently prescribed to the patient"
-            )
+            with col3:
+                bmi = weight / ((height/100) ** 2)
+                st.metric("BMI", f"{bmi:.1f}")
+                
+            with col4:
+                admission_type = st.selectbox("Admission Type", ["Inpatient", "ICU", "Emergency", "Outpatient"])
+                
+            st.subheader("🩺 Clinical Vitals")
+            col1, col2, col3, col4, col5 = st.columns(5)
             
-            st.subheader("Laboratory Results")
+            with col1:
+                systolic_bp = st.number_input("Systolic BP (mmHg)", min_value=70, max_value=250, value=120)
+                
+            with col2:
+                diastolic_bp = st.number_input("Diastolic BP (mmHg)", min_value=40, max_value=150, value=80)
+                
+            with col3:
+                heart_rate = st.number_input("Heart Rate (bpm)", min_value=40, max_value=200, value=75)
+                
+            with col4:
+                spo2 = st.number_input("SpO₂ (%)", min_value=70, max_value=100, value=98)
+                
+            with col5:
+                temperature = st.number_input("Temperature (°C)", min_value=35.0, max_value=42.0, value=36.8, step=0.1)
+                respiratory_rate = st.number_input("Respiratory Rate (rpm)", min_value=10, max_value=40, value=16)
+            
+            st.subheader("🏥 Comorbidities")
             col1, col2, col3 = st.columns(3)
             
             with col1:
-                creatinine = st.number_input("Creatinine (mg/dL)", min_value=0.0, max_value=20.0, value=1.0, step=0.1)
+                comorbidities = []
+                if st.checkbox("Hypertension"):
+                    comorbidities.append("Hypertension")
+                if st.checkbox("Diabetes Mellitus"):
+                    comorbidities.append("Diabetes")
+                if st.checkbox("Chronic Kidney Disease"):
+                    comorbidities.append("CKD")
+                    
+            with col2:
+                if st.checkbox("Cardiovascular Disease"):
+                    comorbidities.append("CVD")
+                if st.checkbox("Liver Disease"):
+                    comorbidities.append("Liver_Disease")
+                if st.checkbox("COPD/Asthma"):
+                    comorbidities.append("COPD")
+                    
+            with col3:
+                if st.checkbox("Cancer"):
+                    comorbidities.append("Cancer")
+                if st.checkbox("Depression/Anxiety"):
+                    comorbidities.append("Mental_Health")
+                    
+            st.subheader("💊 Prescribed Medications")
+            drugs = load_drug_list()
+            selected_drugs = st.multiselect(
+                "Select Current Medications", 
+                drugs,
+                help="Select all medications currently prescribed to the patient",
+                max_selections=10
+            )
+            
+            # If drugs selected, show detailed entry
+            if selected_drugs:
+                st.markdown("**Medication Details**")
+                drug_details = {}
+                for i, drug in enumerate(selected_drugs):
+                    with st.expander(f"{drug}", expanded=False):
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            dose = st.text_input(f"Dose for {drug}", value="", key=f"dose_{i}")
+                        with col2:
+                            route = st.selectbox(f"Route for {drug}", ["PO", "IV", "IM", "SC", "Topical"], key=f"route_{i}")
+                        with col3:
+                            frequency = st.selectbox(f"Frequency for {drug}", ["QD", "BID", "TID", "QID", "PRN"], key=f"freq_{i}")
+                        drug_details[drug] = {
+                            'dose': dose,
+                            'route': route,
+                            'frequency': frequency
+                        }
+            
+            st.subheader("🧪 Laboratory Results")
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                creatinine = st.number_input("Creatinine (mg/dL)", min_value=0.1, max_value=20.0, value=1.0, step=0.1)
                 alt = st.number_input("ALT (U/L)", min_value=0, max_value=1000, value=30)
             
             with col2:
                 ast = st.number_input("AST (U/L)", min_value=0, max_value=1000, value=28)
-                hemoglobin = st.number_input("Hemoglobin (g/dL)", min_value=0.0, max_value=20.0, value=13.5, step=0.1)
+                egfr = st.number_input("eGFR (mL/min/1.73m²)", min_value=5, max_value=120, value=90)
             
             with col3:
-                wbc = st.number_input("WBC (K/μL)", min_value=0.0, max_value=50.0, value=7.5, step=0.1)
-                platelets = st.number_input("Platelets (K/μL)", min_value=0, max_value=1000, value=250)
+                hemoglobin = st.number_input("Hemoglobin (g/dL)", min_value=5.0, max_value=20.0, value=13.5, step=0.1)
+                wbc = st.number_input("WBC (K/μL)", min_value=1.0, max_value=50.0, value=7.5, step=0.1)
             
-            submitted = st.form_submit_button("Predict ADR Risk", type="primary")
+            with col4:
+                platelets = st.number_input("Platelets (K/μL)", min_value=50, max_value=1000, value=250)
+                albumin = st.number_input("Albumin (g/dL)", min_value=1.0, max_value=5.0, value=4.0, step=0.1)
+            
+            st.subheader("🏨 Admission Information")
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                admission_status = st.selectbox("Current Status", ["Inpatient", "ICU", "Discharged"])
+                length_of_stay = st.number_input("Length of Stay (days)", min_value=0, max_value=365, value=3)
+                
+            with col2:
+                num_admissions = st.number_input("Total Hospital Admissions (past year)", min_value=0, max_value=20, value=1)
+                num_icu_stays = st.number_input("ICU Stays (past year)", min_value=0, max_value=10, value=0)
+                
+            with col3:
+                total_prescriptions = st.number_input("Total Active Prescriptions", min_value=0, max_value=50, value=len(selected_drugs))
+                total_lab_tests = st.number_input("Lab Tests (past month)", min_value=0, max_value=50, value=5)
+            
+            submitted = st.form_submit_button("🔍 Predict ADR Risk", type="primary")
             
             if submitted:
+                # Calculate derived features
+                polypharmacy_flag = 1 if len(selected_drugs) >= 5 else 0
+                major_polypharmacy_flag = 1 if len(selected_drugs) >= 10 else 0
+                
+                # Calculate drug risk features
+                drug_risk_features = calculate_drug_risk_features(selected_drugs)
+                
                 patient_data = {
+                    # Demographics (model features)
                     'anchor_age': age,
                     'gender': gender,
+                    
+                    # Admission/clinical features (model features)
+                    'num_admissions': num_admissions,
+                    'avg_los_days': length_of_stay,
+                    'ever_died_in_hospital': 0,  # Unknown, default to 0
+                    'total_diagnoses': len(comorbidities),
+                    'total_procedures': 0,  # Not collected
+                    'total_prescriptions': total_prescriptions,
+                    'total_lab_tests': total_lab_tests,
+                    'num_icu_stays': num_icu_stays,
+                    'total_icu_los_days': 0,  # Not collected
+                    
+                    # Medication features (model features)
                     'num_drugs': len(selected_drugs),
-                    'total_diagnoses': num_comorbidities,
+                    'mean_adr_rate': drug_risk_features['mean_adr_rate'],
+                    'max_adr_rate': drug_risk_features['max_adr_rate'],
+                    'std_adr_rate': drug_risk_features['std_adr_rate'],
+                    'mean_severe_rate': drug_risk_features['mean_severe_rate'],
+                    'max_severe_rate': drug_risk_features['max_severe_rate'],
+                    'num_high_risk_drugs': drug_risk_features['num_high_risk_drugs'],
+                    'polypharmacy_flag': polypharmacy_flag,
+                    'major_polypharmacy_flag': major_polypharmacy_flag,
+                    
+                    # Lab features (model features)
                     'lab_creatinine': creatinine,
-                    'lab_alanine_aminotran': alt,
-                    'lab_aspartate_aminot': ast,
                     'lab_hemoglobin': hemoglobin,
-                    'lab_white_blood_cell': wbc,
                     'lab_platelet_count': platelets,
-                    'polypharmacy_flag': 1 if len(selected_drugs) >= 5 else 0,
-                    'selected_drugs': selected_drugs
+                    'lab_white_blood_cells': wbc,
+                    
+                    # Additional collected data
+                    'selected_drugs': selected_drugs,
+                    'drug_details': drug_details,
+                    'comorbidities': comorbidities,
+                    'vitals': {
+                        'systolic_bp': systolic_bp,
+                        'diastolic_bp': diastolic_bp,
+                        'heart_rate': heart_rate,
+                        'spo2': spo2,
+                        'temperature': temperature,
+                        'respiratory_rate': respiratory_rate
+                    },
+                    'additional_labs': {
+                        'lab_alanine_aminotran': alt,
+                        'lab_aspartate_aminot': ast,
+                        'egfr': egfr,
+                        'albumin': albumin
+                    },
+                    'admission_info': {
+                        'admission_type': admission_type,
+                        'length_of_stay': length_of_stay,
+                        'admission_status': admission_status
+                    }
                 }
                 
                 # Store in session state and switch to results page
                 st.session_state['patient_data'] = patient_data
                 st.session_state['show_results'] = True
                 st.session_state['current_page'] = "Prediction Results"
-                st.success("Patient data saved! Switching to Prediction Results...")
+                st.success("Patient data saved! Generating real-time ADR risk prediction...")
                 st.rerun()
     
     else:  # FHIR Upload
@@ -890,160 +1030,66 @@ def page_patient_entry():
                 st.error(f"Error parsing FHIR file: {e}")
 
 
-def page_prediction_results():
-    """Page 2: Prediction Results"""
-    st.markdown('<div class="main-header">ADR Risk Prediction Results</div>', unsafe_allow_html=True)
+def calculate_drug_risk_features(selected_drugs):
+    """Calculate drug risk features based on selected drugs"""
+    if not selected_drugs:
+        return {
+            'mean_adr_rate': 0.0,
+            'max_adr_rate': 0.0,
+            'std_adr_rate': 0.0,
+            'mean_severe_rate': 0.0,
+            'max_severe_rate': 0.0,
+            'num_high_risk_drugs': 0
+        }
     
-    if 'patient_data' not in st.session_state:
-        st.warning("Please enter patient data first")
-        return
-    
-    patient_data = st.session_state['patient_data']
-    
-    # Load model
-    model, explainer = load_model_and_explainer()
-    if model is None:
-        return
-    
-    # Prepare features
     try:
-        # Load feature template
-        X_template = pd.read_csv("data/output/X_features.csv").iloc[0:1].copy()
+        # Load FAERS drug data
+        faers_data = pd.read_csv("data/output/faers_drug_summary.csv")
         
-        # Fill with patient data
-        for key, value in patient_data.items():
-            if key in X_template.columns and not isinstance(value, list):
-                X_template[key] = value
+        # Get drug risk data for selected drugs
+        drug_rates = []
+        severe_rates = []
+        high_risk_count = 0
         
-        # Encode gender if needed
-        if 'gender' in X_template.columns:
-            X_template['gender'] = 1 if patient_data.get('gender') == 'M' else 0
+        for drug in selected_drugs:
+            drug_info = faers_data[faers_data['drugname'].str.upper() == drug.upper()]
+            if not drug_info.empty:
+                adr_rate = drug_info.iloc[0]['ADR_Rate']
+                severe_rate = drug_info.iloc[0]['Severe_Outcome_Rate']
+                drug_rates.append(adr_rate)
+                severe_rates.append(severe_rate)
+                
+                # Count as high risk if severe rate > 10% or adr rate > 5%
+                if severe_rate > 0.10 or adr_rate > 0.05:
+                    high_risk_count += 1
         
-        # Fill missing values with median
-        X_template = X_template.fillna(X_template.median())
+        # If no drugs found in FAERS, use defaults
+        if not drug_rates:
+            drug_rates = [0.02] * len(selected_drugs)  # Default 2% ADR rate
+            severe_rates = [0.01] * len(selected_drugs)  # Default 1% severe rate
         
+        return {
+            'mean_adr_rate': np.mean(drug_rates),
+            'max_adr_rate': np.max(drug_rates),
+            'std_adr_rate': np.std(drug_rates) if len(drug_rates) > 1 else 0.0,
+            'mean_severe_rate': np.mean(severe_rates),
+            'max_severe_rate': np.max(severe_rates),
+            'num_high_risk_drugs': high_risk_count
+        }
     except Exception as e:
-        st.error(f"Error preparing features: {e}")
-        return
-    
-    # Make prediction
-    try:
-        risk_proba = model.predict_proba(X_template)[0, 1]
-        risk_category = get_risk_category(risk_proba)
-        risk_color = get_risk_color(risk_category)
-        
-        # Display results
-        st.markdown("---")
-        
-        # Risk gauge
-        col1, col2 = st.columns([1, 2])
-        
-        with col1:
-            fig_gauge = create_risk_gauge(risk_proba)
-            st.plotly_chart(fig_gauge, use_container_width=False)
-        
-        with col2:
-            st.markdown(f"""
-            <div class="risk-box" style="background-color: {risk_color}20; border-left: 5px solid {risk_color};">
-                <h2 style="color: {risk_color}; margin: 0;">Risk Level: {risk_category}</h2>
-                <p style="font-size: 1.2rem; margin-top: 0.5rem;">
-                    Risk Score: {risk_proba:.1%}
-                </p>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            # Risk interpretation
-            if risk_category == "Low":
-                st.success("Low risk of adverse drug reaction. Continue routine monitoring.")
-            elif risk_category == "Moderate":
-                st.warning("Moderate risk. Enhanced monitoring recommended.")
-            else:
-                st.error("High risk! Immediate review and intervention recommended.")
-        
-        # Get SHAP explanation
-        st.markdown("---")
-        st.subheader("Top Contributing Factors")
-        
-        try:
-            top_contributors, shap_values = explainer.get_local_explanation(X_template, top_n=10)
-            
-            # Display top contributors
-            contrib_df = pd.DataFrame([
-                {
-                    'Factor': feat,
-                    'Impact': f"{'↑' if val > 0 else '↓'} {abs(val):.3f}",
-                    'Direction': 'Increases Risk' if val > 0 else 'Decreases Risk'
-                }
-                for feat, val in top_contributors[:5]
-            ])
-            
-            st.dataframe(contrib_df, hide_index=True)
-            
-        except Exception as e:
-            st.warning(f"Could not compute SHAP values: {e}")
-        
-        # Patient summary
-        st.markdown("---")
-        st.subheader("Patient Summary")
-        
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.metric("Age", patient_data.get('anchor_age', 'N/A'))
-            st.metric("Gender", patient_data.get('gender', 'N/A'))
-        
-        with col2:
-            st.metric("Number of Medications", patient_data.get('num_drugs', 'N/A'))
-            st.metric("Comorbidities", patient_data.get('total_diagnoses', 'N/A'))
-        
-        with col3:
-            st.metric("Creatinine", f"{patient_data.get('lab_creatinine', 0):.1f} mg/dL")
-            polypharm = "Yes" if patient_data.get('polypharmacy_flag', 0) == 1 else "No"
-            st.metric("Polypharmacy", polypharm)
-        
-        # Export options
-        st.markdown("---")
-        st.subheader("Export Report")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            # CSV export
-            report_data = {
-                'Timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                'Risk_Score': risk_proba,
-                'Risk_Category': risk_category,
-                'Age': patient_data.get('anchor_age', 'N/A'),
-                'Gender': patient_data.get('gender', 'N/A'),
-                'Num_Drugs': patient_data.get('num_drugs', 0),
-            }
-            
-            df_report = pd.DataFrame([report_data])
-            csv = df_report.to_csv(index=False)
-            
-            st.download_button(
-                label="Download CSV Report",
-                data=csv,
-                file_name=generate_report_filename(),
-                mime="text/csv"
-            )
-        
-        with col2:
-            # JSON export
-            json_report = json.dumps(report_data, indent=2)
-            st.download_button(
-                label="Download JSON Report",
-                data=json_report,
-                file_name=generate_report_filename().replace('.csv', '.json'),
-                mime="application/json"
-            )
-        
-    except Exception as e:
-        st.error(f"Error making prediction: {e}")
-        st.exception(e)
+        print(f"Error calculating drug risk features: {e}")
+        # Return conservative defaults
+        return {
+            'mean_adr_rate': 0.02,
+            'max_adr_rate': 0.05,
+            'std_adr_rate': 0.01,
+            'mean_severe_rate': 0.01,
+            'max_severe_rate': 0.03,
+            'num_high_risk_drugs': 0
+        }
 
 
-def page_explainability():
+def page_prediction_results():    """Page 2: Prediction Results with Real-time Calculations"""    # Check if we have patient data    if 'patient_data' not in st.session_state:        st.warning("No patient data found. Please enter patient information first.")        if st.button("Go to Patient Entry"):            st.session_state['current_page'] = "Patient Entry"            st.rerun()        return        patient_data = st.session_state['patient_data']        # Load model (uncached for real-time updates)    model, explainer = load_model_and_explainer()    if model is None:        return        # Prepare features for model    try:        # Load feature template        X_template = pd.read_csv("data/output/X_features.csv").iloc[0:1].copy()                # Clear existing values to ensure fresh data        for col in X_template.columns:            X_template[col] = 0                # Fill with actual patient data - ALL model features        feature_mapping = {            'gender': 1 if patient_data.get('gender') == 'M' else 0,            'anchor_age': patient_data.get('anchor_age', 65),            'num_admissions': patient_data.get('num_admissions', 1),            'avg_los_days': patient_data.get('avg_los_days', 3),            'ever_died_in_hospital': patient_data.get('ever_died_in_hospital', 0),            'total_diagnoses': patient_data.get('total_diagnoses', 0),            'total_procedures': patient_data.get('total_procedures', 0),            'total_prescriptions': patient_data.get('total_prescriptions', len(patient_data.get('selected_drugs', []))),            'total_lab_tests': patient_data.get('total_lab_tests', 5),            'num_icu_stays': patient_data.get('num_icu_stays', 0),            'total_icu_los_days': patient_data.get('total_icu_los_days', 0),            'num_drugs': patient_data.get('num_drugs', len(patient_data.get('selected_drugs', []))),            'mean_adr_rate': patient_data.get('mean_adr_rate', 0.02),            'max_adr_rate': patient_data.get('max_adr_rate', 0.05),            'std_adr_rate': patient_data.get('std_adr_rate', 0.01),            'mean_severe_rate': patient_data.get('mean_severe_rate', 0.01),            'max_severe_rate': patient_data.get('max_severe_rate', 0.03),            'num_high_risk_drugs': patient_data.get('num_high_risk_drugs', 0),            'polypharmacy_flag': patient_data.get('polypharmacy_flag', 0),            'major_polypharmacy_flag': patient_data.get('major_polypharmacy_flag', 0),            'lab_creatinine': patient_data.get('lab_creatinine', 1.0),            'lab_hemoglobin': patient_data.get('lab_hemoglobin', 13.5),            'lab_platelet_count': patient_data.get('lab_platelet_count', 250),            'lab_white_blood_cells': patient_data.get('lab_white_blood_cells', 7.5)        }                # Update template with patient values        for feature, value in feature_mapping.items():            if feature in X_template.columns:                X_template[feature] = value                # Fill any remaining missing values with median from training data        X_template = X_template.fillna(X_template.median())                # Debug: Show what we're sending to model        with st.expander("🔍 Debug: Model Input Features"):            st.write("Features being sent to model:")            st.dataframe(X_template.T)            except Exception as e:        st.error(f"Error preparing features: {e}")        st.exception(e)        return        # Make prediction with real-time calculation    try:        # Get probability for ADR class (class 1)        risk_proba = model.predict_proba(X_template)[0, 1]        risk_category = get_risk_category(risk_proba)        risk_color = get_risk_color(risk_category)                st.markdown("---")        st.subheader("🎯 Real-time ADR Risk Prediction")                # Risk gauge and interpretation        col1, col2 = st.columns([1, 2])                with col1:            fig_gauge = create_risk_gauge(risk_proba)            st.plotly_chart(fig_gauge, use_container_width=False)                with col2:            st.markdown(f"""            <div class="risk-box" style="background-color: {risk_color}20; border-left: 5px solid {risk_color};">                <h2 style="color: {risk_color}; margin: 0;">Risk Level: {risk_category}</h2>                <p style="font-size: 1.4rem; margin-top: 0.5rem; font-weight: bold;">                    ADR Risk Score: {risk_proba:.1%}                </p>                <p style="color: #6B7280; margin-top: 0.5rem;">                    Based on {len(patient_data.get('selected_drugs', []))} medications,                     {len(patient_data.get('comorbidities', []))} comorbidities,                     and current lab values                </p>            </div>            """, unsafe_allow_html=True)                        # Enhanced risk interpretation            if risk_category == "Low":                st.success("✅ **Low Risk**: Continue routine monitoring. Standard pharmaceutical care recommended.")            elif risk_category == "Moderate":                st.warning("⚠️ **Moderate Risk**: Enhanced monitoring required. Consider medication review.")            else:                st.error("🚨 **High Risk**: Immediate intervention required! Urgent medication review recommended.")                # Drug-specific analysis        st.markdown("---")        st.subheader("💊 Drug-Specific ADR Analysis")                selected_drugs = patient_data.get('selected_drugs', [])        if selected_drugs:            drug_analysis = analyze_drug_risks(selected_drugs)                        col1, col2 = st.columns(2)                        with col1:                st.markdown("**Top Contributing Drugs**")                for drug, risk_info in drug_analysis['top_drugs']:                    severity_color = "🔴" if risk_info['severe_rate'] > 0.10 else "🟡" if risk_info['severe_rate'] > 0.05 else "🟢"                    st.markdown(f"{severity_color} **{drug}**")                    st.markdown(f"   - ADR Rate: {risk_info['adr_rate']:.1%}")                    st.markdown(f"   - Severe Rate: {risk_info['severe_rate']:.1%}")                                with col2:                st.markdown("**Risk Summary**")                st.metric("High-Risk Drugs", drug_analysis['high_risk_count'])                st.metric("Mean ADR Rate", f"{drug_analysis['mean_adr_rate']:.1%}")                st.metric("Max Severe Rate", f"{drug_analysis['max_severe_rate']:.1%}")        else:            st.info("No medications selected. Add medications to see drug-specific risk analysis.")                # Get SHAP explanation for model transparency        st.markdown("---")        st.subheader("🔬 Model Explanation (SHAP)")                try:            # Force fresh explanation calculation            top_contributors = explainer.get_local_explanation(X_template, top_n=10)                        # Create enhanced explanation display            contrib_data = []            for i, (feat, val) in enumerate(top_contributors[:8]):                direction = "📈 Increases" if val > 0 else "📉 Decreases"                impact = "High" if abs(val) > 0.02 else "Medium" if abs(val) > 0.01 else "Low"                contrib_data.append({                    'Rank': i + 1,                    'Feature': feat.replace('_', ' ').title(),                    'Impact': direction,                    'Magnitude': f"{abs(val):.3f}",                    'Level': impact                })                        st.dataframe(pd.DataFrame(contrib_data), hide_index=True)                    except Exception as e:            st.warning(f"Could not compute SHAP values: {e}")            # Fallback to basic feature importance            st.info("Showing model feature importance instead...")                        feature_importance = model.feature_importances_            feature_names = X_template.columns                        importance_df = pd.DataFrame({                'Feature': [f.replace('_', ' ').title() for f in feature_names],                'Importance': feature_importance            }).sort_values('Importance', ascending=False).head(8)                        st.dataframe(importance_df, hide_index=True)                # Enhanced patient summary        st.markdown("---")        st.subheader("📋 Patient Clinical Summary")                col1, col2, col3, col4 = st.columns(4)                with col1:            st.markdown("**Demographics**")            st.metric("Age", f"{patient_data.get('anchor_age', 'N/A')} years")            st.metric("Sex", patient_data.get('gender', 'N/A'))            weight = patient_data.get('weight', 'N/A')            height = patient_data.get('height', 'N/A')            if weight != 'N/A' and height != 'N/A':                bmi = weight / ((height/100) ** 2)                st.metric("BMI", f"{bmi:.1f}")                with col2:            st.markdown("**Medications**")            st.metric("Total Drugs", patient_data.get('num_drugs', 0))            st.metric("Polypharmacy", "Yes" if patient_data.get('polypharmacy_flag', 0) else "No")            st.metric("High-Risk Drugs", patient_data.get('num_high_risk_drugs', 0))                with col3:            st.markdown("**Lab Values**")            st.metric("Creatinine", f"{patient_data.get('lab_creatinine', 0):.1f} mg/dL")            st.metric("Hemoglobin", f"{patient_data.get('lab_hemoglobin', 0):.1f} g/dL")            st.metric("WBC", f"{patient_data.get('lab_white_blood_cells', 0):.1f} K/μL")                with col4:            st.markdown("**Clinical Status**")            st.metric("Comorbidities", len(patient_data.get('comorbidities', [])))            st.metric("Admissions (1yr)", patient_data.get('num_admissions', 0))            st.metric("Lab Tests (1mo)", patient_data.get('total_lab_tests', 0))                # Clinical recommendations        st.markdown("---")        st.subheader("🏥 Clinical Recommendations")                recommendations = generate_clinical_recommendations(risk_proba, risk_category, patient_data)                for rec in recommendations:            if "High" in risk_category:                st.error(f"🚨 {rec}")            elif "Moderate" in risk_category:                st.warning(f"⚠️ {rec}")            else:                st.success(f"✅ {rec}")                # Download prediction report        st.markdown("---")        report_data = create_detailed_report(patient_data, risk_proba, risk_category, top_contributors if 'top_contributors' in locals() else [])                col1, col2 = st.columns(2)        with col1:            st.download_button(                label="📥 Download ADR Report (CSV)",                data=report_data['csv'],                file_name=report_data['filename'],                mime="text/csv"            )                with col2:            st.download_button(                label="📋 Download Clinical Summary (JSON)",                data=report_data['json'],                file_name=report_data['filename'].replace('.csv', '.json'),                mime="application/json"            )            except Exception as e:        st.error(f"Error making prediction: {e}")        st.exception(e)def analyze_drug_risks(selected_drugs):    """Analyze drug-specific risks from FAERS data"""    if not selected_drugs:        return {'top_drugs': [], 'high_risk_count': 0, 'mean_adr_rate': 0, 'max_severe_rate': 0}        try:        faers_data = pd.read_csv("data/output/faers_drug_summary.csv")                drug_info = []        for drug in selected_drugs:            drug_row = faers_data[faers_data['drugname'].str.upper() == drug.upper()]            if not drug_row.empty:                row = drug_row.iloc[0]                drug_info.append((drug, {                    'adr_rate': row['ADR_Rate'],                    'severe_rate': row['Severe_Outcome_Rate'],                    'count': row['ADR_Count']                }))                # Sort by severe rate (highest risk first)        drug_info.sort(key=lambda x: x[1]['severe_rate'], reverse=True)                # Calculate summary stats        severe_rates = [info[1]['severe_rate'] for info in drug_info]        adr_rates = [info[1]['adr_rate'] for info in drug_info]        high_risk_count = sum(1 for rate in severe_rates if rate > 0.10)                return {            'top_drugs': drug_info[:5],  # Top 5 drugs            'high_risk_count': high_risk_count,            'mean_adr_rate': np.mean(adr_rates) if adr_rates else 0,            'max_severe_rate': np.max(severe_rates) if severe_rates else 0        }            except Exception as e:        print(f"Error analyzing drug risks: {e}")        # Return safe defaults        return {            'top_drugs': [(drug, {'adr_rate': 0.02, 'severe_rate': 0.01, 'count': 0}) for drug in selected_drugs[:5]],            'high_risk_count': 0,            'mean_adr_rate': 0.02,            'max_severe_rate': 0.01        }def generate_clinical_recommendations(risk_score, risk_category, patient_data):    """Generate clinical recommendations based on risk assessment"""    recommendations = []        # Base recommendations by risk level    if risk_category == "High":        recommendations.extend([            "Immediate medication review by clinical pharmacist",            "Consider alternative therapeutic options for high-risk drugs",            "Increase monitoring frequency for lab parameters and clinical symptoms",            "Educate patient on potential ADR warning signs",            "Consider dose adjustments based on renal/hepatic function"        ])    elif risk_category == "Moderate":        recommendations.extend([            "Enhanced monitoring protocol recommended",            "Review for potential drug-drug interactions",            "Consider therapeutic drug monitoring where appropriate",            "Schedule follow-up in 1-2 weeks to reassess"        ])    else:        recommendations.extend([            "Continue routine pharmaceutical care",            "Maintain standard monitoring schedule",            "Annual medication review recommended"        ])        # Specific recommendations based on patient data    drugs = patient_data.get('selected_drugs', [])    comorbidities = patient_data.get('comorbidities', [])        # Polypharmacy recommendations    if len(drugs) >= 5:        recommendations.append("Implement medication reconciliation to reduce polypharmacy burden")        # Comorbidity-specific recommendations    if 'CKD' in comorbidities:        recommendations.append("Adjust doses for renally eliminated drugs; monitor creatinine closely")    if 'Liver_Disease' in comorbidities:        recommendations.append("Monitor liver function tests; adjust doses for hepatically metabolized drugs")    if 'Diabetes' in comorbidities:        recommendations.append("Monitor blood glucose more frequently when starting new medications")        # Drug-specific recommendations    high_risk_drugs = patient_data.get('num_high_risk_drugs', 0)    if high_risk_drugs > 0:        recommendations.append(f"Extra vigilance required for {high_risk_drugs} high-risk medication(s)")        return recommendationsdef create_detailed_report(patient_data, risk_score, risk_category, shap_contributors):    """Create comprehensive prediction report"""    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")        # Main report data    report_data = {        'timestamp': timestamp,        'risk_score': float(risk_score),        'risk_category': risk_category,        'patient_demographics': {            'age': patient_data.get('anchor_age'),            'gender': patient_data.get('gender'),            'weight': patient_data.get('weight'),            'height': patient_data.get('height')        },        'medications': {            'total_count': len(patient_data.get('selected_drugs', [])),            'drug_list': patient_data.get('selected_drugs', []),            'polypharmacy': patient_data.get('polypharmacy_flag', 0) == 1,            'high_risk_drugs': patient_data.get('num_high_risk_drugs', 0)        },        'clinical_data': {            'comorbidities': patient_data.get('comorbidities', []),            'lab_values': {                'creatinine': patient_data.get('lab_creatinine'),                'hemoglobin': patient_data.get('lab_hemoglobin'),                'wbc': patient_data.get('lab_white_blood_cells'),                'platelets': patient_data.get('lab_platelet_count')            },            'vitals': patient_data.get('vitals', {}),            'admission_info': patient_data.get('admission_info', {})        },        'model_features': {            'num_admissions': patient_data.get('num_admissions'),            'total_diagnoses': patient_data.get('total_diagnoses'),            'total_prescriptions': patient_data.get('total_prescriptions'),            'mean_adr_rate': patient_data.get('mean_adr_rate'),            'max_severe_rate': patient_data.get('max_severe_rate')        }    }        if shap_contributors:        report_data['top_contributing_features'] = [            {'feature': feat, 'shap_value': float(val)}             for feat, val in shap_contributors[:10]        ]        # Create CSV report    csv_data = {        'Timestamp': timestamp,        'Risk_Score': f"{risk_score:.1%}",        'Risk_Category': risk_category,        'Age': patient_data.get('anchor_age'),        'Gender': patient_data.get('gender'),        'Total_Medications': len(patient_data.get('selected_drugs', [])),        'Comorbidities': len(patient_data.get('comorbidities', [])),        'Creatinine_mg_dL': patient_data.get('lab_creatinine'),        'Hemoglobin_g_dL': patient_data.get('lab_hemoglobin'),        'WBC_K_uL': patient_data.get('lab_white_blood_cells'),        'ADR_Rate': f"{patient_data.get('mean_adr_rate', 0):.3f}",        'Severe_Rate': f"{patient_data.get('max_severe_rate', 0):.3f}",        'Medications': '; '.join(patient_data.get('selected_drugs', []))    }        df_report = pd.DataFrame([csv_data])    csv_content = df_report.to_csv(index=False)        # Create JSON report    json_content = json.dumps(report_data, indent=2, default=str)        filename = f"ADR_Assessment_{timestamp}.csv"        return {        'csv': csv_content,        'json': json_content,        'filename': filename    }def page_explainability():
     """Page 3: Explainability (SHAP View)"""
     st.markdown('<div class="main-header">Model Explainability & Insights</div>', unsafe_allow_html=True)
     
