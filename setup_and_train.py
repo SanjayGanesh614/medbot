@@ -18,14 +18,19 @@ def main():
     print("📁 Project directory:", project_root)
     print()
     
+    dataset = os.environ.get("TRAIN_DATASET", "vigiflow").lower()
+    os.environ["TRAIN_DATASET"] = dataset
+    
     # Check data files
     print("🔍 Checking for required data files...")
-    required_files = [
-        "output/mimic_patient_summary.csv",
-        "output/mimic_prescriptions.csv",
-        "output/mimic_key_labs.csv",
-        "output/faers_drug_summary.csv"
-    ]
+    required_files = []
+    if dataset != "vigiflow":
+        required_files = [
+            "output/mimic_patient_summary.csv",
+            "output/mimic_prescriptions.csv",
+            "output/mimic_key_labs.csv",
+            "output/faers_drug_summary.csv"
+        ]
     
     missing_files = []
     for file in required_files:
@@ -36,32 +41,37 @@ def main():
             print(f"  ✗ {file} NOT FOUND")
             missing_files.append(file)
     
-    if missing_files:
+    if missing_files and dataset != "vigiflow":
         print("\n⚠️  Missing data files. Please ensure preprocessed data is in data/output/")
         return
     
-    print("\n✓ All required data files found!\n")
+    if dataset != "vigiflow":
+        print("\n✓ All required data files found!\n")
     
     # Step 1: Preprocessing
-    print("="*70)
-    print("STEP 1: Data Preprocessing")
-    print("="*70)
-    print("Merging MIMIC-IV and FAERS data...")
-    print()
-    
-    from src.preprocess import main as preprocess_main
-    try:
-        preprocess_main()
-        print("\n✓ Preprocessing complete!")
-    except Exception as e:
-        print(f"\n✗ Preprocessing failed: {e}")
-        return
+    if dataset != "vigiflow":
+        print("="*70)
+        print("STEP 1: Data Preprocessing")
+        print("="*70)
+        print("Merging MIMIC-IV and FAERS data...")
+        print()
+        
+        from src.preprocess import main as preprocess_main
+        try:
+            preprocess_main()
+            print("\n✓ Preprocessing complete!")
+        except Exception as e:
+            print(f"\n✗ Preprocessing failed: {e}")
+            return
     
     # Step 2: Training
     print("\n" + "="*70)
     print("STEP 2: Model Training")
     print("="*70)
-    print("Training XGBoost classifier...")
+    if dataset == "vigiflow":
+        print("Training XGBoost classifier on VigiFlow dataset...")
+    else:
+        print("Training XGBoost classifier...")
     print()
     
     from src.train_xgb import main as train_main

@@ -531,6 +531,17 @@ def page_patient_entry():
                 
                 # Parse FHIR
                 patient_data = parse_fhir_patient(fhir_data)
+                meds = patient_data.get('medications', [])
+                risk_stats = calculate_drug_risk_features(meds)
+                patient_data['selected_drugs'] = meds
+                patient_data['mean_adr_rate'] = risk_stats.get('mean_adr_rate', 0.0)
+                patient_data['max_adr_rate'] = risk_stats.get('max_adr_rate', 0.0)
+                patient_data['std_adr_rate'] = risk_stats.get('std_adr_rate', 0.0)
+                patient_data['mean_severe_rate'] = risk_stats.get('mean_severe_rate', 0.0)
+                patient_data['max_severe_rate'] = risk_stats.get('max_severe_rate', 0.0)
+                patient_data['num_high_risk_drugs'] = risk_stats.get('num_high_risk_drugs', 0)
+                if 'age' in patient_data:
+                    patient_data['anchor_age'] = patient_data['age']
                 st.json(patient_data)
                 
                 if st.button("Process FHIR Data"):

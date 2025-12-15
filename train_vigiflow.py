@@ -2,7 +2,7 @@
 Training pipeline for VigiFlow Excel data.
 
 Reads the pharmacovigilance export, engineers features, splits 80/20,
-fits a RandomForest model, evaluates on validation data, and stores the trained
+fits an XGBoost model, evaluates on validation data, and stores the trained
 pipeline plus stratified datasets.
 """
 from __future__ import annotations
@@ -14,7 +14,7 @@ import joblib
 import numpy as np
 import pandas as pd
 from sklearn.compose import ColumnTransformer
-from sklearn.ensemble import RandomForestClassifier
+from xgboost import XGBClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import classification_report, roc_auc_score
 from sklearn.model_selection import train_test_split
@@ -200,11 +200,25 @@ def train_model(X: pd.DataFrame, y: pd.Series) -> dict:
         ]
     )
 
-    model = RandomForestClassifier(
-        n_estimators=300,
+    pos = (y_train == 1).sum()
+    neg = (y_train == 0).sum()
+    scale_pos_weight = (neg / pos) if pos > 0 else 1.0
+
+    model = XGBClassifier(
+        n_estimators=700,
+        learning_rate=0.035,
+        max_depth=7,
+        min_child_weight=1,
+        subsample=0.9,
+        colsample_bytree=0.9,
+        reg_alpha=0,
+        reg_lambda=1,
         random_state=42,
-        class_weight="balanced",
+        objective="binary:logistic",
+        eval_metric="auc",
+        scale_pos_weight=scale_pos_weight,
         n_jobs=-1,
+        use_label_encoder=False,
     )
 
     clf = Pipeline(
