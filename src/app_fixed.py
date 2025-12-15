@@ -739,21 +739,10 @@ def create_detailed_report(patient_data, risk_score, risk_category, shap_contrib
     }
     
     if shap_contributors:
-        try:
-            # Handle the case where shap_contributors is a list of tuples (feature, value)
-            if isinstance(shap_contributors, list) and len(shap_contributors) > 0:
-                # Check if first element is a tuple
-                if isinstance(shap_contributors[0], tuple) and len(shap_contributors[0]) == 2:
-                    report_data['top_contributing_features'] = [
-                        {'feature': feat, 'shap_value': float(val)} 
-                        for feat, val in shap_contributors[:10]
-                    ]
-                else:
-                    # If it's not in the expected format, skip adding SHAP data
-                    print(f"Unexpected SHAP contributors format: {type(shap_contributors[0])}")
-        except Exception as e:
-            print(f"Error processing SHAP contributors: {e}")
-            # Continue without SHAP data
+        report_data['top_contributing_features'] = [
+            {'feature': feat, 'shap_value': float(val)} 
+            for feat, val in shap_contributors[:10]
+        ]
     
     # Create CSV report
     csv_data = {
@@ -929,13 +918,9 @@ def page_prediction_results():
         st.markdown("---")
         st.subheader("🔬 Model Explanation (SHAP)")
         
-        # Initialize top_contributors to empty list
-        top_contributors = []
-        
         try:
             # Force fresh explanation calculation
-            top_contributors_tuple = explainer.get_local_explanation(X_template, top_n=10)
-            top_contributors = top_contributors_tuple[0]  # Extract just the list of tuples
+            top_contributors = explainer.get_local_explanation(X_template, top_n=10)
             
             # Create enhanced explanation display
             contrib_data = []
@@ -1017,7 +1002,7 @@ def page_prediction_results():
         
         # Download prediction report
         st.markdown("---")
-        report_data = create_detailed_report(patient_data, risk_proba, risk_category, top_contributors)
+        report_data = create_detailed_report(patient_data, risk_proba, risk_category, top_contributors if 'top_contributors' in locals() else [])
         
         col1, col2 = st.columns(2)
         with col1:
