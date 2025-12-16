@@ -35,7 +35,7 @@ data/output/*.csv
 data/output/*.parquet
 
 # Reports (generated)
-reports/*.png
+
 reports/*.pdf
 reports/*.csv
 

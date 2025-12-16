@@ -265,6 +265,34 @@ class ADRModelTrainer:
             'test': self.evaluate_model(splits['X_test'], splits['y_test'], "Test")
         }
 
+                # Generate plots
+        os.makedirs("reports", exist_ok=True)
+        
+        # Confusion Matrix (using test set)
+        test_y_prob = self.model.predict_proba(splits['X_test'])[:, 1]
+        test_y_pred = (test_y_prob >= self.optimal_threshold).astype(int)
+        test_cm = confusion_matrix(splits['y_test'], test_y_pred)
+        self.plot_confusion_matrix(test_cm, save_path="reports/confusion_matrix.png")
+        
+        # ROC Curve (using test set) - fixed for XGBoost
+        test_y_prob = self.model.predict_proba(splits['X_test'])[:, 1]
+        fpr, tpr, _ = roc_curve(splits['y_test'], test_y_prob)
+        auc = roc_auc_score(splits['y_test'], test_y_prob)
+        
+        plt.figure(figsize=(8, 6))
+        plt.plot(fpr, tpr, label=f'AUC = {auc:.3f}', linewidth=2)
+        plt.plot([0, 1], [0, 1], 'k--', label='Random')
+        plt.xlabel('False Positive Rate')
+        plt.ylabel('True Positive Rate')
+        plt.title('ROC Curve')
+        plt.legend()
+        plt.grid(alpha=0.3)
+        plt.savefig("reports/roc_curve.png", dpi=150, bbox_inches='tight')
+        plt.close()
+        
+        # Feature Importance
+        self.plot_feature_importance(top_n=20)
+
         os.makedirs("models", exist_ok=True)
         save_model(
             self.model,
