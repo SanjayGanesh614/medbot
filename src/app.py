@@ -1798,6 +1798,26 @@ def process_uploaded_patient_data(patient_data):
         for col in X_template.columns:
             X_template[col] = 0
         
+        # Calculate derived clinical flags (replicating preprocess.py logic)
+        renal_abnormal_flag = 1 if complete_patient_data.get('lab_creatinine', 0) > 1.5 else 0
+        
+        # Hepatic flag: ALT > 40 OR AST > 40 OR Bilirubin > 1.2
+        # Note: Bilirubin might be missing in form, default to 0.8 (normal)
+        lab_alt = complete_patient_data.get('lab_alt', 25)
+        lab_ast = complete_patient_data.get('lab_ast', 30)
+        lab_bilirubin = complete_patient_data.get('lab_bilirubin', 0.8)
+        
+        hepatic_abnormal_flag = 1 if (lab_alt > 40 or lab_ast > 40 or lab_bilirubin > 1.2) else 0
+        
+        # Anemia: Hemoglobin < 10
+        anemia_flag = 1 if complete_patient_data.get('lab_hemoglobin', 13.5) < 10 else 0
+        
+        # Thrombocytopenia: Platelets < 150
+        thrombocytopenia_flag = 1 if complete_patient_data.get('lab_platelet_count', 250) < 150 else 0
+        
+        # Infection: WBC > 12
+        infection_flag = 1 if complete_patient_data.get('lab_white_blood_cells', 7.5) > 12 else 0
+
         feature_mapping = {
             'gender': complete_patient_data['gender'],
             'anchor_age': complete_patient_data['anchor_age'],
@@ -1819,10 +1839,22 @@ def process_uploaded_patient_data(patient_data):
             'num_high_risk_drugs': complete_patient_data['num_high_risk_drugs'],
             'polypharmacy_flag': complete_patient_data['polypharmacy_flag'],
             'major_polypharmacy_flag': complete_patient_data['major_polypharmacy_flag'],
+            # Labs
             'lab_creatinine': complete_patient_data['lab_creatinine'],
             'lab_hemoglobin': complete_patient_data['lab_hemoglobin'],
             'lab_platelet_count': complete_patient_data['lab_platelet_count'],
             'lab_white_blood_cells': complete_patient_data['lab_white_blood_cells'],
+            'lab_alt': lab_alt,
+            'lab_ast': lab_ast,
+            'lab_bilirubin': lab_bilirubin,
+            'lab_egfr': complete_patient_data.get('lab_egfr', 90),
+            'lab_alp': complete_patient_data.get('lab_alp', 70), # Default normal
+            # Derived Flags
+            'renal_abnormal_flag': renal_abnormal_flag,
+            'hepatic_abnormal_flag': hepatic_abnormal_flag,
+            'anemia_flag': anemia_flag,
+            'thrombocytopenia_flag': thrombocytopenia_flag,
+            'infection_flag': infection_flag
         }
         
         for feature, value in feature_mapping.items():
