@@ -28,16 +28,7 @@ ENV/
 # Jupyter Notebook
 .ipynb_checkpoints
 
-# Models and Data (large files)
-models/*.pkl
-models/*.joblib
-data/output/*.csv
-data/output/*.parquet
 
-# Reports (generated)
-
-reports/*.pdf
-reports/*.csv
 
 # IDE
 .vscode/
@@ -50,9 +41,5 @@ reports/*.csv
 .DS_Store
 Thumbs.db
 
-# Streamlit
-.streamlit/
 
-# Logs
-*.log
 
