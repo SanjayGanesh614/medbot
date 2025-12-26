@@ -185,7 +185,7 @@ class MIMICFAERSPreprocessor:
             (df["hepatic_abnormal_flag"] == 1).astype(int)
         )
 
-        df["ADR_flag"] = (score >= 4).astype(int)
+        df["ADR_flag"] = (score >= 6).astype(int)
         return df
 
     # --------------------------------------------------
