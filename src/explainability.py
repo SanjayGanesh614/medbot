@@ -10,6 +10,8 @@ import os
 import sys
 from typing import List, Tuple, Dict
 import warnings
+import xgboost as xgb
+import json
 warnings.filterwarnings('ignore')
 
 # Add parent directory to path
@@ -22,7 +24,7 @@ class SHAPExplainer:
     SHAP-based explainer for XGBoost ADR model
     """
     
-    def __init__(self, model=None, model_path: str = "models/xgb_adr_model.pkl"):
+    def __init__(self, model=None, model_path: str = "models/xgb_adr_model.json"):
         """
         Initialize SHAP explainer
         
@@ -38,13 +40,20 @@ class SHAPExplainer:
         self.explainer = None
         self.feature_names = []
         
-        # Load metadata if available
+        # Load feature manifest (priority)
         try:
-            metadata_path = model_path.replace(".pkl", "_metadata.pkl")
-            metadata = load_metadata(metadata_path)
-            self.feature_names = metadata.get('feature_names', [])
+            with open("colabupload/feature_manifest.json", "r") as f:
+                data = json.load(f)
+                self.feature_names = data.get("features", [])
         except:
-            print("Warning: Could not load feature names from metadata")
+            # Fallback to metadata pkl
+            try:
+                metadata_path = model_path.replace(".json", "_metadata.pkl").replace(".pkl", "_metadata.pkl")
+                if os.path.exists(metadata_path):
+                    metadata = load_metadata(metadata_path)
+                    self.feature_names = metadata.get('feature_names', [])
+            except:
+                print("Warning: Could not load feature names")
     
     def create_explainer(self, X_background: pd.DataFrame = None):
         """
@@ -278,7 +287,12 @@ class SHAPExplainer:
             Dictionary with explanation details
         """
         # Get prediction
-        pred_proba = self.model.predict_proba(X_single)[0, 1]
+        # Fix: Use DMatrix for Booster and remove leakage
+        leakage = ['weak_score', 'high_risk_drug', 'faers_adr_rate', 'faers_severe_rate']
+        X_safe = X_single.drop(columns=[c for c in leakage if c in X_single.columns], errors='ignore')
+        
+        dtest = xgb.DMatrix(X_safe)
+        pred_proba = self.model.predict(dtest)[0]
         
         # Get SHAP explanation
         top_contributors, shap_values = self.get_local_explanation(X_single, top_n=10)
@@ -360,7 +374,7 @@ def main():
     
     # Load model
     try:
-        model = load_model("models/xgb_adr_model.pkl")
+        model = load_model("models/xgb_adr_model.json")
         print("✓ Model loaded")
     except FileNotFoundError:
         print("Error: Model not found. Please train the model first.")

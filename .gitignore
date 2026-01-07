@@ -43,3 +43,15 @@ Thumbs.db
 
 
 
+
+.env
+/colabupload/splits
+colabupload/mimic_vital_signs_summary.csv
+colabupload/mimic_procedures_detailed.csv
+colabupload/mimic_prescriptions.csv
+colabupload/mimic_lab_summary.csv
+colabupload/mimic_key_labs.csv
+colabupload/mimic_icustays.csv
+colabupload/mimic_diagnoses_detailed.csv
+colabupload/mimic_admission_summary.csv
+colabupload/X_features.csv

@@ -46,9 +46,9 @@ def get_risk_color(risk_category: str) -> str:
     return colors.get(risk_category, "#6c757d")
 
 
-def load_model(model_path: str = "models/xgb_adr_model.pkl"):
+def load_model(model_path: str = "models/xgb_adr_model.json"):
     """
-    Load trained XGBoost model
+    Load trained XGBoost model (supports .json and .pkl)
     
     Args:
         model_path: Path to saved model
@@ -56,9 +56,22 @@ def load_model(model_path: str = "models/xgb_adr_model.pkl"):
     Returns:
         Loaded model
     """
+    # Auto-switch to JSON if default PKL doesn't exist but JSON does
+    if model_path.endswith(".pkl") and not os.path.exists(model_path):
+        json_path = model_path.replace(".pkl", ".json")
+        if os.path.exists(json_path):
+            model_path = json_path
+
     if not os.path.exists(model_path):
         raise FileNotFoundError(f"Model not found at {model_path}. Please train the model first.")
-    return joblib.load(model_path)
+        
+    if model_path.endswith(".json"):
+        import xgboost as xgb
+        model = xgb.Booster()
+        model.load_model(model_path)
+        return model
+    else:
+        return joblib.load(model_path)
 
 
 def load_metadata(metadata_path: str = "models/model_metadata.pkl"):
@@ -161,7 +174,8 @@ def parse_fhir_patient(fhir_json: Dict) -> Dict:
         Dictionary with extracted features
     """
     try:
-        patient_data = {}
+        # Initialize with input data to preserve non-FHIR fields (Hybrid support)
+        patient_data = fhir_json.copy()
         
         # Extract basic demographics
         if 'gender' in fhir_json:
@@ -181,7 +195,12 @@ def parse_fhir_patient(fhir_json: Dict) -> Dict:
                     med_name = med['medicationCodeableConcept'].get('text', '')
                     if med_name:
                         medications.append(med_name)
+                    if med_name:
+                        medications.append(med_name)
             patient_data['medications'] = medications
+            # Alias for app compatibility
+            if 'selected_drugs' not in patient_data:
+                patient_data['selected_drugs'] = medications
         
         return patient_data
         

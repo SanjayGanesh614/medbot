@@ -13,6 +13,7 @@ import sys
 from datetime import datetime
 import matplotlib.pyplot as plt
 from io import BytesIO
+import xgboost as xgb
 
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -22,6 +23,16 @@ from src.utils import (
 )
 from src.explainability import SHAPExplainer
 from src.evaluate import ModelEvaluator
+
+# --- NEW IMPORTS (AUTH & DB & AGENT) ---
+from src.database import init_db, get_db, SessionLocal, User, PatientRecord
+from src.auth import signup_user, login_user
+from src.clinical_agent import get_clinical_recommendations
+# ---------------------------------------
+
+# Initialize Database
+init_db()
+
 # Dashboard functions integrated below
 
 # Page configuration
@@ -645,23 +656,27 @@ div[data-testid="stDownloadButton"] button:hover {
 def load_model_and_explainer():
     """Load model and SHAP explainer (uncached for real-time updates)"""
     try:
-        model = load_model("models/xgb_adr_model.pkl")
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        model_path = os.path.join(base_dir, "models", "xgb_adr_model.json")
+        model = load_model(model_path)
         explainer = SHAPExplainer(model=model)
         
         # Try to load pre-computed explainer
         try:
-            explainer.load_explainer("models/shap_explainer.pkl")
+            explainer.load_explainer(os.path.join(base_dir, "models", "shap_explainer.pkl"))
         except:
             # Create new explainer if not found
             try:
-                X_sample = pd.read_csv("data/output/X_features.csv").sample(100, random_state=42)
+                template_path = os.path.join(base_dir, "models", "feature_template.csv")
+                X_sample = pd.read_csv(template_path).sample(100, random_state=42)
                 explainer.create_explainer(X_sample)
             except:
                 explainer.create_explainer()
         
         return model, explainer
     except Exception as e:
-        st.error(f"Error loading model: {e}")
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) # redundant re-calc if exception happens early but safe
+        st.error(f"Error loading model from {base_dir}: {e}")
         st.info("Please run training first: `python src/train_xgb.py`")
         return None, None
 
@@ -670,12 +685,39 @@ def load_model_and_explainer():
 def load_drug_list():
     """Load available drugs from FAERS data"""
     try:
-        faers = pd.read_csv("data/output/faers_drug_summary.csv")
+        # Fix: Use correct path
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        faers_path = os.path.join(base_dir, "colabupload", "faers_drug_summary.csv")
+        faers = pd.read_csv(faers_path)
         drugs = sorted(faers['drugname'].dropna().unique().tolist())
         return drugs
     except:
         return ["Aspirin", "Metformin", "Lisinopril", "Atorvastatin", "Levothyroxine"]
 
+
+@st.cache_data
+def load_encoders_map():
+    """Load and invert encoders.json for mapping UI strings to Model integers"""
+    try:
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        # Fix: User specified encoders.json is directly in colabupload
+        enc_path = os.path.join(base_dir, "colabupload", "encoders.json")
+        
+        if not os.path.exists(enc_path):
+            print(f"Encoders not found at {enc_path}")
+            return None
+            
+        with open(enc_path, "r") as f:
+            raw_encoders = json.load(f)
+            
+        # Convert list of classes to dict {label: index}
+        encoders_map = {}
+        for col, classes in raw_encoders.items():
+            encoders_map[col] = {str(c): i for i, c in enumerate(classes)}
+        return encoders_map
+    except Exception as e:
+        print(f"Warning: Could not load encoders: {e}")
+        return None
 
 @st.cache_data
 def load_performance_metrics():
@@ -755,20 +797,46 @@ def page_patient_entry():
     )
 
     # Hero action buttons - only these trigger redirect
-    st.markdown(
-        """
-        <div class="hero-actions">
-            <a href="?page=dashboard" target="_self" class="hero-primary-btn">
-                <span class="hero-kbd-icon">⚡</span>
-                Get Started
-            </a>
-            <a href="?page=dashboard" target="_self" class="hero-secondary-btn">
-                Learn More
-            </a>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    # Custom CSS to Make Streamlit Buttons look like the original Hero Buttons
+    st.markdown("""
+    <style>
+    /* Force specific styling for buttons in this view */
+    div[data-testid="stHorizontalBlock"] button[kind="primary"] {
+        background-color: #111827 !important;
+        color: #FFFFFF !important;
+        border-radius: 999px !important;
+        padding: 0.5rem 2rem !important;
+        border: none !important;
+        box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08) !important;
+    }
+    div[data-testid="stHorizontalBlock"] button[kind="primary"]:hover {
+        background-color: #030712 !important;
+        box-shadow: 0 14px 28px rgba(15, 23, 42, 0.16) !important;
+        transform: translateY(-1px);
+    }
+    div[data-testid="stHorizontalBlock"] button[kind="secondary"] {
+        background-color: #FFFFFF !important;
+        color: #111827 !important;
+        border: 1px solid #D1D5DB !important;
+        border-radius: 999px !important;
+        padding: 0.5rem 2rem !important;
+    }
+    div[data-testid="stHorizontalBlock"] button[kind="secondary"]:hover {
+        background-color: #F9FAFB !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    # Replaced HTML buttons with Streamlit buttons
+    _, col_btn1, col_btn2, _ = st.columns([1, 1.2, 1.2, 1])
+    with col_btn1:
+        if st.button("⚡ Get Started", type="primary", use_container_width=True):
+            st.query_params["page"] = "dashboard"
+            st.rerun()
+    with col_btn2:
+        if st.button("Learn More", use_container_width=True):
+            st.query_params["page"] = "dashboard"
+            st.rerun()
 
     # Feature cards section (3 columns x 2 rows)
     st.markdown('<div class="feature-section">', unsafe_allow_html=True)
@@ -823,15 +891,18 @@ def page_patient_entry():
               Start using AI-CPA to predict and prevent adverse drug reactions in your
               clinical practice.
             </div>
-            <a href="?page=dashboard" target="_self" class="cta-button">
-              <span>⚡</span>
-              <span>Start Using AI-CPA</span>
-            </a>
           </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
+    
+    # Bottom CTA Button (Streamlit Native)
+    _, col_cta, _ = st.columns([1, 1.5, 1])
+    with col_cta:
+        if st.button("⚡ Start Using AI-CPA", type="primary", use_container_width=True, key="cta_btn"):
+            st.query_params["page"] = "dashboard"
+            st.rerun()
 
 
 def calculate_drug_risk_features(selected_drugs):
@@ -848,7 +919,8 @@ def calculate_drug_risk_features(selected_drugs):
     
     try:
         # Load FAERS drug data
-        faers_data = pd.read_csv("data/output/faers_drug_summary.csv")
+        # Fix: Use correct path 'colabupload' instead of 'data/output'
+        faers_data = pd.read_csv("colabupload/faers_drug_summary.csv")
         
         # Get drug risk data for selected drugs
         drug_rates = []
@@ -899,7 +971,8 @@ def analyze_drug_risks(selected_drugs):
         return {'top_drugs': [], 'high_risk_count': 0, 'mean_adr_rate': 0, 'max_severe_rate': 0}
     
     try:
-        faers_data = pd.read_csv("data/output/faers_drug_summary.csv")
+        # Fix: Use correct path
+        faers_data = pd.read_csv("colabupload/faers_drug_summary.csv")
         
         drug_info = []
         for drug in selected_drugs:
@@ -1099,7 +1172,7 @@ def page_prediction_results():
     # Prepare features for model
     try:
         # Load feature template
-        X_template = pd.read_csv("data/output/X_features.csv").iloc[0:1].copy()
+        X_template = pd.read_csv("models/feature_template.csv").iloc[0:1].copy()
         
         # Clear existing values to ensure fresh data
         for col in X_template.columns:
@@ -1154,7 +1227,12 @@ def page_prediction_results():
     # Make prediction with real-time calculation
     try:
         # Get probability for ADR class (class 1)
-        risk_proba = model.predict_proba(X_template)[0, 1]
+        # Fix: Use DMatrix for Booster and remove leakage
+        leakage = ['weak_score', 'high_risk_drug', 'faers_adr_rate', 'faers_severe_rate']
+        X_safe = X_template.drop(columns=[c for c in leakage if c in X_template.columns], errors='ignore')
+        
+        dtest = xgb.DMatrix(X_safe)
+        risk_proba = model.predict(dtest)[0]
         risk_category = get_risk_category(risk_proba)
         risk_color = get_risk_color(risk_category)
         
@@ -1249,8 +1327,10 @@ def page_prediction_results():
             # Fallback to basic feature importance
             st.info("Showing model feature importance instead...")
             
-            feature_importance = model.feature_importances_
-            feature_names = X_template.columns
+            # Correct way to get importance from Booster
+            importance_map = model.get_score(importance_type='gain')
+            # Map valid features, default to 0
+            feature_importance = [importance_map.get(f, 0) for f in feature_names]
             
             importance_df = pd.DataFrame({
                 'Feature': [f.replace('_', ' ').title() for f in feature_names],
@@ -1293,10 +1373,11 @@ def page_prediction_results():
             st.metric("Admissions (1yr)", patient_data.get('num_admissions', 0))
             st.metric("Lab Tests (1mo)", patient_data.get('total_lab_tests', 0))
         
-        # Clinical recommendations
+        # Clinical recommendations (ENHANCED WITH AGENT)
         st.markdown("---")
         st.subheader("🏥 Clinical Recommendations")
         
+        # 1. Standard Heuristic Recommendations (Existing)
         recommendations = generate_clinical_recommendations(risk_proba, risk_category, patient_data)
         
         for rec in recommendations:
@@ -1306,6 +1387,54 @@ def page_prediction_results():
                 st.warning(f"⚠️ {rec}")
             else:
                 st.success(f"✅ {rec}")
+
+        # 2. AI Agent Recommendations (New)
+        if st.session_state.get('user'):
+            with st.expander("🤖 AI Pharmacist Insights (Powered by Gemini)", expanded=False):
+                with st.spinner("Analyzing patient profile with AI..."):
+                    # Basic risk analysis dict for the agent
+                    risk_analysis_summary = {
+                        'risk_score': risk_proba,
+                        'risk_category': risk_category
+                    }
+                    ai_recs = get_clinical_recommendations(patient_data, risk_analysis_summary)
+                    st.markdown(ai_recs)
+
+        # 3. Save Report Feature (New)
+        col_save, col_spacer = st.columns([1, 4])
+        with col_save:
+            if st.button("💾 Save to History"):
+                if 'user' in st.session_state:
+                    db = SessionLocal()
+                    try:
+                        # Serialize data
+                        import json
+                        p_json = json.dumps(patient_data, default=str)
+                        r_json = json.dumps({
+                            'risk_score': risk_proba, 
+                            'risk_category': risk_category,
+                            'timestamp': datetime.now().isoformat()
+                        }, default=str)
+                        
+                        user_id = st.session_state['user'].id
+                        new_record = PatientRecord(
+                            user_id=user_id,
+                            patient_name=f"Patient {patient_data.get('anchor_age')}y/{patient_data.get('gender')}",
+                            risk_score=risk_proba,
+                            risk_category=risk_category,
+                            patient_data_json=p_json,
+                            prediction_result_json=r_json,
+                            clinical_recommendations=str(recommendations)
+                        )
+                        db.add(new_record)
+                        db.commit()
+                        st.success("Report saved to history!")
+                    except Exception as e:
+                        st.error(f"Error saving report: {e}")
+                    finally:
+                        db.close()
+                else:
+                    st.info("Please log in to save reports.")
         
         # Download prediction report
         st.markdown("---")
@@ -1347,10 +1476,14 @@ def page_explainability():
         st.subheader("Global Feature Importance")
         try:
             # Load feature importance
-            feature_names = pd.read_csv("data/output/X_features.csv").columns
+            feature_names = pd.read_csv("models/feature_template.csv").columns
+            # Correct way to get importance from Booster
+            importance_map = model.get_score(importance_type='gain')
+            feature_importance = [importance_map.get(f, 0) for f in feature_names]
+            
             importance_df = pd.DataFrame({
                 'Feature': feature_names,
-                'Importance': model.feature_importances_
+                'Importance': feature_importance
             }).sort_values('Importance', ascending=False)
             
             # Plot feature importance
@@ -1375,7 +1508,7 @@ def page_explainability():
             try:
                 patient_data = st.session_state['patient_data']
                 # Prepare features (same as in prediction)
-                X_template = pd.read_csv("data/output/X_features.csv").iloc[0:1].copy()
+                X_template = pd.read_csv("models/feature_template.csv").iloc[0:1].copy()
                 for col in X_template.columns:
                     X_template[col] = 0
                 
@@ -1529,9 +1662,17 @@ def page_performance():
         else:
             st.info("Calibration curve not available.")
     
-    # Feature importance
+    # Feature Importance Analysis
     st.markdown("---")
-    st.subheader("Feature Importance")
+    st.subheader("📊 Key Risk Drivers")
+    
+    # Define feature_names centrally before any try/except blocks
+    try:
+        feature_names = pd.read_csv("models/feature_template.csv").columns.tolist()
+    except:
+        feature_names = []
+    
+    # Static Feature Importance Plot
     if os.path.exists("reports/feature_importance.png"):
         st.image("reports/feature_importance.png")
     else:
@@ -1734,6 +1875,9 @@ def parse_csv_patient(csv_data):
 
 def process_uploaded_patient_data(patient_data):
     """Process uploaded patient data and make prediction"""
+    # Debug: See what data is actually coming in
+    # st.write("Debug - Incoming Patient Data:", patient_data) 
+    
     # Normalize gender
     if isinstance(patient_data.get('gender'), str):
         gender_val = 1 if patient_data['gender'].upper().startswith('M') else 0
@@ -1751,7 +1895,11 @@ def process_uploaded_patient_data(patient_data):
     major_polypharmacy_flag = 1 if len(selected_drugs) >= 10 else 0
     
     # Prepare complete patient data
-    complete_patient_data = {
+    # Prepare complete patient data (Start with copy to preserve all keys like comorbidities, labs)
+    complete_patient_data = patient_data.copy()
+    
+    # Update with calculated/normalized fields
+    complete_patient_data.update({
         'anchor_age': patient_data.get('anchor_age', patient_data.get('age', 65)),
         'gender': gender_val,
         'num_admissions': patient_data.get('num_admissions', 1),
@@ -1773,11 +1921,12 @@ def process_uploaded_patient_data(patient_data):
         'num_high_risk_drugs': drug_risk_features['num_high_risk_drugs'],
         'polypharmacy_flag': polypharmacy_flag,
         'major_polypharmacy_flag': major_polypharmacy_flag,
+        # Ensure Critical Labs are set (defaults handled in mapping but good to have here)
         'lab_creatinine': patient_data.get('lab_creatinine', 1.0),
         'lab_hemoglobin': patient_data.get('lab_hemoglobin', 13.5),
         'lab_platelet_count': patient_data.get('lab_platelet_count', 250),
         'lab_white_blood_cells': patient_data.get('lab_white_blood_cells', 7.5),
-    }
+    })
     
     # Store patient data
     if 'patients' not in st.session_state:
@@ -1794,7 +1943,7 @@ def process_uploaded_patient_data(patient_data):
     
     try:
         # Prepare features for model
-        X_template = pd.read_csv("data/output/X_features.csv").iloc[0:1].copy()
+        X_template = pd.read_csv("models/feature_template.csv").iloc[0:1].copy()
         for col in X_template.columns:
             X_template[col] = 0
         
@@ -1818,12 +1967,120 @@ def process_uploaded_patient_data(patient_data):
         # Infection: WBC > 12
         infection_flag = 1 if complete_patient_data.get('lab_white_blood_cells', 7.5) > 12 else 0
 
+        # --- Fix: Map Comorbidities to Model Features ---
+        comorbs = [c.lower() for c in complete_patient_data.get('comorbidities', [])]
+        
+        feat_ckd = 1 if any('kidney' in c or 'ckd' in c or 'renal' in c for c in comorbs) else 0
+        feat_cad_hf = 1 if any('heart' in c or 'failure' in c or 'cad' in c or 'hf' in c for c in comorbs) else 0
+        feat_diabetes = 1 if any('diabet' in c for c in comorbs) else 0
+        feat_htn = 1 if any('hypertens' in c or 'bp' in c for c in comorbs) else 0
+        feat_resp = 1 if any('asthma' in c or 'copd' in c for c in comorbs) else 0
+        feat_liver = 1 if any('liver' in c or 'cirrhosis' in c for c in comorbs) else 0
+        
+        # New: Extended Feature Mapping
+        feat_cancer = 1 if any('cancer' in c or 'malignan' in c or 'tumor' in c or 'chemo' in c for c in comorbs) else 0
+        feat_immune = 1 if any('immune' in c or 'transplant' in c or 'hiv' in c for c in comorbs) else 0
+        feat_dialysis = 1 if any('dialysis' in c for c in comorbs) or complete_patient_data.get('on_dialysis') else 0
+        feat_oxygen = 1 if any('oxygen' in c for c in comorbs) or complete_patient_data.get('on_oxygen') else 0
+        feat_vent = 1 if complete_patient_data.get('on_ventilator') else 0
+        feat_vaso = 1 if complete_patient_data.get('on_vasopressors') else 0
+
+        # --- Categorical Encodings (Dynamic from encoders.json) ---
+        encoders = load_encoders_map()
+        
+        if encoders:
+             def get_enc(col, val, default=0):
+                 if col in encoders:
+                     # Try exact match, then 'Other', then default
+                     return encoders[col].get(str(val), encoders[col].get('Other', default))
+                 return default
+
+             race_val = get_enc('race', complete_patient_data.get('race', 'Other'))
+             ins_val = get_enc('insurance', complete_patient_data.get('insurance', 'Medicare'))
+             marital_val = get_enc('marital_status', complete_patient_data.get('marital_status', 'Married'))
+             adm_val = get_enc('admission_type', complete_patient_data.get('admission_type', 'Emergency'))
+             # Map 'ward' to 'admission_location'
+             loc_val = get_enc('admission_location', complete_patient_data.get('ward', 'ICU'))
+        else:
+            # Fallback (Approximate indices if encoders.json missing)
+            race_map = {"White": 29, "Black": 4, "Hispanic": 12, "Asian": 2, "Other": 20} 
+            ins_map = {"Medicare": 2, "Private": 4, "Medicaid": 1, "Other": 3}
+            marital_map = {"Married": 2, "Single": 4, "Widowed": 6, "Divorced": 1}
+            adm_type_map = {"Emergency": 5, "Inpatient": 1, "OPD": 6, "ICU": 2}
+            ward_map = {"General Ward": 9, "HDU": 3, "ICU": 2, "Private": 4} 
+
+            race_val = race_map.get(complete_patient_data.get('race', 'Other'), 0)
+            ins_val = ins_map.get(complete_patient_data.get('insurance', 'Medicare'), 0)
+            marital_val = marital_map.get(complete_patient_data.get('marital_status', 'Married'), 0)
+            adm_val = adm_type_map.get(complete_patient_data.get('admission_type', 'Emergency'), 0)
+            loc_val = ward_map.get(complete_patient_data.get('ward', 'General Ward'), 9)
+
         feature_mapping = {
+            # Comorbidities (CRITICAL MISSING SIGNALS)
+            'ckd': feat_ckd,
+            'cad_hf': feat_cad_hf,
+            'diabetes_type2': feat_diabetes,
+            'hypertension': feat_htn,
+            'copd_asthma': feat_resp,
+            'chronic_liver_disease': feat_liver,
+            'malignancy': feat_cancer,
+            'immunosuppressed': feat_immune,
+            'on_dialysis': feat_dialysis,
+            'on_oxygen': feat_oxygen,
+            'on_ventilator': feat_vent,
+            'on_vasopressors': feat_vaso,
+            'aki': 1 if feat_ckd and complete_patient_data.get('lab_creatinine', 0) > 2.0 else 0,
+
+            # Demographics & Context
             'gender': complete_patient_data['gender'],
             'anchor_age': complete_patient_data['anchor_age'],
+            'race': race_val,
+            'insurance': ins_val,
+            'marital_status': marital_val,
+            'admission_type': adm_val,
+            'admission_location': loc_val, # Mapped from Ward
+            'discharge_location': 6, # Default to Home (6)
+            
+            # Hospitalization
             'num_admissions': complete_patient_data['num_admissions'],
             'avg_los_days': complete_patient_data['avg_los_days'],
-            'ever_died_in_hospital': complete_patient_data['ever_died_in_hospital'],
+            'los_days': complete_patient_data.get('los_days', 3), 
+            'duration_days': complete_patient_data.get('los_days', 3), # Model alias
+            'hospital_expire_flag': complete_patient_data['ever_died_in_hospital'], # Model alias
+            'ever_died_in_hospital': complete_patient_data['ever_died_in_hospital'], # Keep original just in case
+            
+            # Vitals
+            'vital_heart_rate': complete_patient_data.get('vital_heart_rate', 72),
+            'vital_respiratory_rate': complete_patient_data.get('vital_respiratory_rate', 16),
+            'vital_temperature_celsius': complete_patient_data.get('vital_temperature_celsius', 37.0),
+            'vital_spo2': complete_patient_data.get('vital_spo2', 98),
+            'vital_arterial_blood_pressure_systolic': complete_patient_data.get('vital_arterial_blood_pressure_systolic', 120),
+            'vital_arterial_blood_pressure_diastolic': complete_patient_data.get('vital_arterial_blood_pressure_diastolic', 80),
+            'vital_arterial_blood_pressure_mean': complete_patient_data.get('vital_arterial_blood_pressure_mean', 93),
+
+            # Labs (Comprehensive)
+            'lab_creatinine': complete_patient_data['lab_creatinine'],
+            'lab_hemoglobin': complete_patient_data['lab_hemoglobin'],
+            'lab_platelet_count': complete_patient_data['lab_platelet_count'],
+            'lab_white_blood_cells': complete_patient_data['lab_white_blood_cells'],
+            'lab_sodium': complete_patient_data.get('lab_sodium', 140),
+            'lab_potassium': complete_patient_data.get('lab_potassium', 4.0),
+            'lab_calcium_total': complete_patient_data.get('lab_calcium_total', 9.0),
+            'lab_magnesium': complete_patient_data.get('lab_magnesium', 2.0),
+            'lab_chloride': complete_patient_data.get('lab_chloride', 100),
+            'lab_bicarbonate': complete_patient_data.get('lab_bicarbonate', 24),
+            'lab_glucose': complete_patient_data.get('lab_glucose', 100),
+            'lab_urea_nitrogen': complete_patient_data.get('lab_urea_nitrogen', 15),
+            
+            # Liver
+            'alt_first': lab_alt, 'alt_last': lab_alt, # Assume current is singular
+            'ast_first': lab_ast, 'ast_last': lab_ast,
+            'alp_first': complete_patient_data.get('lab_alp', 70), 
+            'alp_last': complete_patient_data.get('lab_alp', 70),
+            'total_bilirubin_first': lab_bilirubin,
+            'total_bilirubin_last': lab_bilirubin,
+
+            # Drug Stats
             'total_diagnoses': complete_patient_data['total_diagnoses'],
             'total_procedures': complete_patient_data['total_procedures'],
             'total_prescriptions': complete_patient_data['total_prescriptions'],
@@ -1839,16 +2096,7 @@ def process_uploaded_patient_data(patient_data):
             'num_high_risk_drugs': complete_patient_data['num_high_risk_drugs'],
             'polypharmacy_flag': complete_patient_data['polypharmacy_flag'],
             'major_polypharmacy_flag': complete_patient_data['major_polypharmacy_flag'],
-            # Labs
-            'lab_creatinine': complete_patient_data['lab_creatinine'],
-            'lab_hemoglobin': complete_patient_data['lab_hemoglobin'],
-            'lab_platelet_count': complete_patient_data['lab_platelet_count'],
-            'lab_white_blood_cells': complete_patient_data['lab_white_blood_cells'],
-            'lab_alt': lab_alt,
-            'lab_ast': lab_ast,
-            'lab_bilirubin': lab_bilirubin,
-            'lab_egfr': complete_patient_data.get('lab_egfr', 90),
-            'lab_alp': complete_patient_data.get('lab_alp', 70), # Default normal
+            
             # Derived Flags
             'renal_abnormal_flag': renal_abnormal_flag,
             'hepatic_abnormal_flag': hepatic_abnormal_flag,
@@ -1864,7 +2112,20 @@ def process_uploaded_patient_data(patient_data):
         X_template = X_template.fillna(X_template.median())
         
         # Make prediction
-        risk_proba = model.predict_proba(X_template)[0, 1]
+        # Fix: Use DMatrix for Booster and remove leakage
+        leakage = ['weak_score', 'high_risk_drug', 'faers_adr_rate', 'faers_severe_rate']
+        X_safe = X_template.drop(columns=[c for c in leakage if c in X_template.columns], errors='ignore')
+        
+        dtest = xgb.DMatrix(X_safe)
+        preds = model.predict(dtest)
+        
+        if isinstance(preds, (list, np.ndarray)) and len(preds) > 0:
+            risk_proba = preds[0]
+        elif np.isscalar(preds):
+            risk_proba = preds
+        else:
+             print(f"Prediction Error: Model returned {preds}")
+             risk_proba = 0.0
         risk_category = get_risk_category(risk_proba)
         
         # Store prediction
@@ -1888,22 +2149,26 @@ def process_uploaded_patient_data(patient_data):
 
 
 def render_patient_form():
-    """Render patient entry form with ONLY model-required features"""
+    """Render patient entry form - Refactored into 8 Clinical Sections (Expanders)"""
     st.markdown(
         """
         <div class="patient-management-section">
-          <div class="section-header">
-            <div>👤</div>
-            <div>
-              <div class="section-title">Patient Management</div>
-              <div class="section-subtitle">Manage patient records and clinical data for ADR prediction</div>
-    </div>
-          </div>
+            <div class="section-header">
+                <div>👤</div>
+                <div>
+                    <div class="section-title">Patient Clinical Data Entry</div>
+                    <div class="section-subtitle">Comprehensive assessment for precise ADR prediction</div>
+                </div>
+            </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
     
+    # Check session state initialization for dynamic lists
+    if 'medications_list' not in st.session_state:
+        st.session_state['medications_list'] = []
+
     # File upload section
     st.markdown("### Upload Patient Data")
     upload_option = st.radio(
@@ -1950,206 +2215,241 @@ def render_patient_form():
             except Exception as e:
                 st.error(f"Error parsing CSV file: {e}")
                 st.exception(e)
-    
-    st.markdown("---")
-    st.markdown("### Manual Entry Form")
-    
-    with st.form("patient_entry_form", clear_on_submit=False):
-        st.markdown("### Demographics")
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            age = st.number_input("Age (years)", min_value=18, max_value=120, value=65, key="form_age")
-        with col2:
-            gender = st.selectbox("Sex", ["M", "F"], key="form_gender")
-        with col3:
-            weight = st.number_input("Weight (kg)", min_value=30.0, max_value=300.0, value=70.0, step=0.1, key="form_weight")
-        with col4:
-            height = st.number_input("Height (cm)", min_value=100.0, max_value=250.0, value=170.0, step=0.1, key="form_height")
+
+    # --- MANUAL ENTRY FORM ---
+    if upload_option == "Manual Entry":
+        st.markdown("---")
+        st.info("Please complete the following 8 sections for a comprehensive analysis.")
         
-        st.markdown("### Clinical Vitals")
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            systolic_bp = st.number_input("Systolic BP (mmHg)", min_value=50, max_value=250, value=120, key="form_sbp")
-            diastolic_bp = st.number_input("Diastolic BP (mmHg)", min_value=30, max_value=150, value=80, key="form_dbp")
-        with col2:
-            heart_rate = st.number_input("Heart Rate (bpm)", min_value=30, max_value=200, value=72, key="form_hr")
-            spo2 = st.number_input("SpO₂ (%)", min_value=70, max_value=100, value=98, key="form_spo2")
-        with col3:
-            temperature = st.number_input("Temperature (°C)", min_value=35.0, max_value=42.0, value=37.0, step=0.1, key="form_temp")
-            respiratory_rate = st.number_input("Respiratory Rate (per min)", min_value=8, max_value=40, value=16, key="form_rr")
-        
-        st.markdown("### Laboratory Results")
-        col1, col2 = st.columns(2)
-        with col1:
-            st.markdown("**Required Lab Values (for Model)**")
-            lab_creatinine = st.number_input("Creatinine (mg/dL)", min_value=0.1, max_value=20.0, value=1.0, step=0.1, key="form_creatinine")
-            lab_hemoglobin = st.number_input("Hemoglobin (g/dL)", min_value=5.0, max_value=20.0, value=13.5, step=0.1, key="form_hemoglobin")
-            lab_platelet_count = st.number_input("Platelet Count (K/μL)", min_value=50, max_value=1000, value=250, key="form_platelets")
-            lab_white_blood_cells = st.number_input("White Blood Cells (K/μL)", min_value=1.0, max_value=50.0, value=7.5, step=0.1, key="form_wbc")
-        with col2:
-            st.markdown("**Additional Lab Values (Optional)**")
-            lab_alt = st.number_input("ALT (U/L)", min_value=0, max_value=1000, value=25, key="form_alt")
-            lab_ast = st.number_input("AST (U/L)", min_value=0, max_value=1000, value=30, key="form_ast")
-            lab_egfr = st.number_input("eGFR (mL/min/1.73m²)", min_value=0.0, max_value=200.0, value=90.0, step=0.1, key="form_egfr")
-            lab_albumin = st.number_input("Albumin (g/dL)", min_value=1.0, max_value=6.0, value=4.0, step=0.1, key="form_albumin")
-        
-        st.markdown("### Comorbidities")
-        col1, col2 = st.columns(2)
-        with col1:
-            hypertension = st.checkbox("Hypertension", key="form_hypertension")
-            diabetes = st.checkbox("Diabetes", key="form_diabetes")
-            ckd = st.checkbox("Chronic Kidney Disease (CKD)", key="form_ckd")
-            cvd = st.checkbox("Cardiovascular Disease (CVD)", key="form_cvd")
-        with col2:
-            cancer = st.checkbox("Cancer", key="form_cancer")
-            copd = st.checkbox("COPD", key="form_copd")
-            mental_health = st.checkbox("Mental Health Conditions", key="form_mental")
-        
-        st.markdown("### Medications")
-        drugs = load_drug_list()
-        selected_drugs = st.multiselect(
-            "Select Current Medications (Generic/Brand Names)",
-            drugs,
-            help="Select all medications currently prescribed",
-            max_selections=20,
-            key="form_drugs"
-        )
-        
-        # Medication details for each selected drug
-        medication_details = {}
-        if selected_drugs:
-            st.markdown("**Medication Details** (Optional - for selected medications)")
-            for i, drug in enumerate(selected_drugs[:10]):  # Limit to first 10 for UI
-                with st.expander(f"Details for {drug}", expanded=False):
-                    med_col1, med_col2, med_col3 = st.columns(3)
-                    with med_col1:
-                        dose = st.text_input(f"Dose", key=f"form_dose_{i}", placeholder="e.g., 500mg")
-                    with med_col2:
-                        route = st.selectbox(f"Route", ["Oral", "IV", "IM", "Subcutaneous", "Topical", "Other"], key=f"form_route_{i}")
-                    with med_col3:
-                        frequency = st.text_input(f"Frequency", key=f"form_freq_{i}", placeholder="e.g., QID, BID")
-                    medication_details[drug] = {
-                        'dose': dose,
-                        'route': route,
-                        'frequency': frequency
+        # 1. Patient Identification & Context
+        with st.expander("1. Patient Identification & Context", expanded=True):
+            st.subheader("Patient Identification")
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                age = st.number_input("Age (years)", min_value=18, max_value=120, value=65, key="sec1_age")
+                gender = st.selectbox("Sex", ["Male", "Female", "Other"], key="sec1_gender")
+            with c2:
+                weight = st.number_input("Weight (kg)", min_value=30.0, max_value=200.0, value=70.0, key="sec1_weight")
+                height = st.number_input("Height (cm)", min_value=100.0, max_value=250.0, value=170.0, key="sec1_height")
+            with c3:
+                bmi = 0.0
+                if height > 0:
+                    bmi = weight / ((height/100)**2)
+                st.metric("BMI", f"{bmi:.1f}")
+                
+            st.subheader("Care Setting")
+            c1, c2 = st.columns(2)
+            with c1:
+                adm_type = st.selectbox("Admission Type", ["Inpatient", "OPD", "ICU", "Emergency"], key="sec1_adm_type")
+                ward = st.selectbox("Ward Type", ["General Ward", "HDU", "ICU", "Private"], key="sec1_ward")
+            with c2:
+                st.number_input("Day of Hospitalization", min_value=1, value=1, key="sec1_day")
+                st.selectbox("Primary Reason", ["Infection", "Cardiovascular", "Respiratory", "Trauma", "Neurological", "Other"], key="sec1_reason")
+
+        # 2. Clinical Vitals
+        with st.expander("2. Clinical Vitals & Organ Status", expanded=False):
+            st.subheader("Hemodynamics & Vitals")
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                sbp = st.number_input("Systolic BP (mmHg)", 50, 250, 120, key="sec2_sbp")
+                dbp = st.number_input("Diastolic BP (mmHg)", 30, 150, 80, key="sec2_dbp")
+                map_val = (sbp + (2*dbp))/3
+                st.metric("Mean Arterial Pressure", f"{map_val:.1f}")
+            with c2:
+                hr = st.number_input("Heart Rate (bpm)", 30, 200, 72, key="sec2_hr")
+                rr = st.number_input("Resp. Rate (bpm)", 8, 60, 16, key="sec2_rr")
+                temp = st.number_input("Temperature (°C)", 32.0, 42.0, 37.0, key="sec2_temp")
+            with c3:
+                spo2 = st.number_input("SpO2 (%)", 50, 100, 98, key="sec2_spo2")
+                
+            st.subheader("Organ Support")
+            col_os1, col_os2 = st.columns(2)
+            with col_os1:
+                st.checkbox("Oxygen Therapy", key="sec2_o2")
+                st.checkbox("Mechanical Ventilation", key="sec2_mv")
+            with col_os2:
+                st.checkbox("Dialysis / CRRT", key="sec2_dialysis")
+                st.checkbox("Vasopressor Support", key="sec2_vaso")
+
+        # 3. Laboratory Results
+        with st.expander("3. Laboratory Results (ADR-Relevant)", expanded=False):
+            st.info("💡 Enter values to see auto-range analysis.")
+            
+            st.markdown("#### 🩸 Hematology")
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                hb = st.number_input("Hemoglobin (g/dL)", 0.0, 25.0, 13.5, help="Normal: 12-16 (F), 13.5-17.5 (M)", key="sec3_hb")
+            with c2:
+                wbc = st.number_input("WBC Count (K/uL)", 0.0, 50.0, 7.5, help="Normal: 4.5-11.0", key="sec3_wbc")
+            with c3:
+                plt = st.number_input("Platelets (K/uL)", 0.0, 1000.0, 250.0, help="Normal: 150-450", key="sec3_plt")
+                
+            st.markdown("#### 💧 Renal & Electrolytes")
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                creat = st.number_input("Creatinine (mg/dL)", 0.0, 15.0, 1.0, key="sec3_creat")
+                egfr = st.number_input("eGFR (mL/min)", 0, 140, 90, key="sec3_egfr")
+            with c2:
+                na = st.number_input("Sodium (mEq/L)", 100, 180, 140, key="sec3_na")
+                k = st.number_input("Potassium (mEq/L)", 1.0, 10.0, 4.0, key="sec3_k")
+            with c3:
+                ca = st.number_input("Calcium (mg/dL)", 0.0, 20.0, 9.0, key="sec3_ca")
+                mg = st.number_input("Magnesium (mg/dL)", 0.0, 10.0, 2.0, key="sec3_mg")
+                
+            st.markdown("#### 🍺 Liver Function")
+            c1, c2 = st.columns(2)
+            with c1:
+                alt = st.number_input("ALT (U/L)", 0, 1000, 25, key="sec3_alt")
+                ast = st.number_input("AST (U/L)", 0, 1000, 30, key="sec3_ast")
+            with c2:
+                alp = st.number_input("ALP (U/L)", 0, 1000, 70, key="sec3_alp")
+                bili = st.number_input("Total Bilirubin (mg/dL)", 0.0, 30.0, 0.8, key="sec3_bili")
+
+        # 4. Comorbidities
+        with st.expander("4. Comorbidities (Structured)", expanded=False):
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown("**Cardiometabolic**")
+                htn = st.checkbox("Hypertension", key="sec4_htn")
+                dm = st.checkbox("Diabetes Mellitus", key="sec4_dm")
+                dm_type = st.select_slider("DM Type", ["Type 1", "Type 2"], disabled=not dm, key="sec4_dm_type") if dm else None
+                cad = st.checkbox("CAD / Heart Failure", key="sec4_cad")
+                st.markdown("**Respiratory**")
+                resp_dz = st.checkbox("Asthma / COPD", key="sec4_resp")
+            
+            with c2:
+                st.markdown("**Renal & Hepatic**")
+                ckd = st.checkbox("Chronic Kidney Disease (CKD)", key="sec4_ckd")
+                ckd_stage = st.selectbox("CKD Stage", ["Stage 1", "Stage 2", "Stage 3", "Stage 4", "Stage 5"], disabled=not ckd, key="sec4_ckd_stage") if ckd else None
+                cld = st.checkbox("Chronic Liver Disease", key="sec4_cld")
+                st.markdown("**Other**")
+                malig = st.checkbox("Malignancy", key="sec4_malig")
+                immuno = st.checkbox("Immunosuppression", key="sec4_immuno")
+
+        # 5. Medication Profile
+        with st.expander("5. Medication Profile (MOST IMPORTANT)", expanded=True):
+            st.info("Add each medication separately.")
+            
+            with st.form("add_drug_form", clear_on_submit=True):
+                c1, c2 = st.columns(2)
+                d_name = c1.text_input("Generic Name")
+                d_dose = c2.text_input("Dose (e.g., 500mg)")
+                
+                c3, c4 = st.columns(2)
+                d_route = c3.selectbox("Route", ["PO (Oral)", "IV", "IM", "SC", "Topical"])
+                d_freq = c4.selectbox("Frequency", ["OD", "BD", "TDS", "QID", "HS", "STAT"])
+                
+                high_risk = st.checkbox("⚠️ High Risk / Narrow Therapeutic Index")
+                
+                if st.form_submit_button("➕ Add Drug"):
+                    if d_name:
+                        st.session_state['medications_list'].append({
+                            "name": d_name,
+                            "dose": d_dose,
+                            "route": d_route,
+                            "freq": d_freq,
+                            "high_risk": high_risk
+                        })
+                        st.rerun()
+                    else:
+                        st.error("Drug name is required")
+
+            if st.session_state['medications_list']:
+                st.write(f"**Current Medications ({len(st.session_state['medications_list'])})**")
+                for idx, med in enumerate(st.session_state['medications_list']):
+                    col_txt, col_act = st.columns([5,1])
+                    with col_txt:
+                        risk_mark = "⚠️" if med['high_risk'] else "💊"
+                        st.markdown(f"{risk_mark} **{med['name']}** {med['dose']} via {med['route']} ({med['freq']})")
+                    with col_act:
+                        if st.button("❌", key=f"del_med_{idx}"):
+                            st.session_state['medications_list'].pop(idx)
+                            st.rerun()
+            else:
+                st.warning("No medications added.")
+
+        # 6. ADR & Allergy History
+        with st.expander("6. ADR & Allergy History", expanded=False):
+            st.text_area("Known Drug Allergies", placeholder="e.g., Penicillin (Rash)", key="sec6_allergies")
+            st.text_area("Previous Adverse Reactions", placeholder="e.g., ACE Inhibitors (Cough)", key="sec6_adrs")
+
+        # 7. Hospitalization Summary
+        with st.expander("7. Hospitalization Summary", expanded=False):
+            c1, c2 = st.columns(2)
+            with c1:
+                n_adm_1yr = st.number_input("Admissions (Past 12m)", 0, 50, 1, key="sec7_adm")
+                icu_adm = st.radio("ICU Admission?", ["No", "Yes"], key="sec7_icu")
+            with c2:
+                avg_los = st.number_input("Average LOS (Days)", 1.0, 100.0, 4.5, key="sec7_los")
+                total_procedures = st.number_input("Total Procedures", 0, 20, 0, key="sec7_proc")
+
+        # 8. Submission & Validation
+        with st.expander("8. Submission & Validation", expanded=True):
+            st.subheader("✅ Final Check")
+            
+            # Compile Comorbidities
+            comorbs = []
+            if htn: comorbs.append("Hypertension")
+            if dm: comorbs.append(f"Diabetes ({dm_type})")
+            if ckd: comorbs.append(f"CKD ({ckd_stage})")
+            if cad: comorbs.append("Heart Failure")
+            if resp_dz: comorbs.append("Asthma/COPD")
+            if cld: comorbs.append("Chronic Liver Disease")
+            if malig: comorbs.append("Malignancy")
+            if immuno: comorbs.append("Immunosuppression")
+            
+            # Validation
+            missing_fields = []
+            if not st.session_state['medications_list']:
+                missing_fields.append("Medications")
+            
+            if missing_fields:
+                st.error(f"⚠️ Missing Mandatory Fields: {', '.join(missing_fields)}")
+            else:
+                st.success("Ready for Prediction")
+                
+                if st.button("🚀 Predict ADR Risk", type="primary", use_container_width=True):
+                    # Construct Payload
+                    patient_payload = {
+                        'anchor_age': age,
+                        'gender': 'M' if gender=='Male' else ('F' if gender=='Female' else 'O'),
+                        'weight': weight,
+                        'height': height,
+                        'num_admissions': n_adm_1yr,
+                        'avg_los_days': avg_los,
+                        'total_diagnoses': len(comorbs),
+                        'total_procedures': total_procedures,
+                        'selected_drugs': [m['name'] for m in st.session_state['medications_list']],
+                        'num_icu_stays': 1 if icu_adm == "Yes" else 0,
+                        'comorbidities': comorbs,
+                        # Labs
+                        'lab_creatinine': creat,
+                        'lab_hemoglobin': hb,
+                        'lab_platelet_count': plt,
+                        'lab_white_blood_cells': wbc,
+                        'lab_alt': alt,
+                        'lab_ast': ast,
+                        'lab_bilirubin': bili,
+                        'lab_egfr': egfr,
+                        'lab_alp': alp,
+                        # Vitals
+                        'vitals': {'sbp': sbp, 'dbp': dbp, 'hr': hr, 'spo2': spo2, 'temp': temp, 'rr': rr},
+                        'temp_c': temp,
+                        'spo2': spo2,
+                        'resprate': rr,
+                        'heart_rate': hr,
+                        'blood_pressure_systolic': sbp,
+                        'blood_pressure_diastolic': dbp,
+                        # Other
+                        'admission_type': adm_type,
+                        'primary_reason': st.session_state.get('sec1_reason'), 
                     }
-        
-        total_prescriptions = st.number_input("Total Active Prescriptions", min_value=0, max_value=50, value=len(selected_drugs), key="form_total_rx")
-        
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            num_admissions = st.number_input("Hospital Admissions (past year)", min_value=0, max_value=50, value=1, key="form_admissions")
-            avg_los_days = st.number_input("Average Length of Stay (days)", min_value=0.0, max_value=365.0, value=3.0, step=0.1, key="form_los")
-            admission_type = st.selectbox("Admission Type", ["Inpatient", "ICU", "Outpatient", "Emergency"], key="form_admission_type")
-        with col2:
-            total_diagnoses = st.number_input("Total Diagnoses", min_value=0, max_value=50, value=0, key="form_diagnoses")
-            total_procedures = st.number_input("Total Procedures", min_value=0, max_value=50, value=0, key="form_procedures")
-            is_icu = st.checkbox("Currently in ICU", key="form_is_icu")
-        with col3:
-            total_lab_tests = st.number_input("Lab Tests (past month)", min_value=0, max_value=100, value=5, key="form_labs")
-            num_icu_stays = st.number_input("ICU Stays (past year)", min_value=0, max_value=20, value=0, key="form_icu_stays")
-            total_icu_los_days = st.number_input("Total ICU LOS (days)", min_value=0.0, max_value=365.0, value=0.0, step=0.1, key="form_icu_los")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            ever_died_in_hospital = st.selectbox("Ever Died in Hospital", [0, 1], format_func=lambda x: "No" if x == 0 else "Yes", key="form_died")
-        with col2:
-            current_los_days = st.number_input("Current Length of Stay (days)", min_value=0.0, max_value=365.0, value=0.0, step=0.1, key="form_current_los")
-        
-        submitted = st.form_submit_button("🔍 Predict ADR Risk", type="primary", use_container_width=True)
-        
-        if submitted:
-            # Collect comorbidities
-            comorbidities = []
-            if hypertension:
-                comorbidities.append("Hypertension")
-            if diabetes:
-                comorbidities.append("Diabetes")
-            if ckd:
-                comorbidities.append("CKD")
-            if cvd:
-                comorbidities.append("CVD")
-            if cancer:
-                comorbidities.append("Cancer")
-            if copd:
-                comorbidities.append("COPD")
-            if mental_health:
-                comorbidities.append("Mental Health")
+                    
+                    with st.spinner("Running AI Analysis..."):
+                        process_uploaded_patient_data(patient_payload)
+                        st.success("Prediction Complete! Switch to 'ADR Predictions' tab.")
             
-            # Collect medication details (from form inputs)
-            med_details = {}
-            if selected_drugs:
-                for i, drug in enumerate(selected_drugs[:10]):
-                    dose_key = f"form_dose_{i}"
-                    route_key = f"form_route_{i}"
-                    freq_key = f"form_freq_{i}"
-                    if dose_key in st.session_state or route_key in st.session_state or freq_key in st.session_state:
-                        med_details[drug] = {
-                            'dose': st.session_state.get(dose_key, ""),
-                            'route': st.session_state.get(route_key, ""),
-                            'frequency': st.session_state.get(freq_key, "")
-                        }
-            
-            # Prepare patient data from form
-            form_patient_data = {
-                # Demographics
-                'anchor_age': age,
-                'gender': gender,  # Keep as 'M' or 'F' for process_uploaded_patient_data
-                'weight': weight,
-                'height': height,
-                
-                # Clinical Vitals
-                'systolic_bp': systolic_bp,
-                'diastolic_bp': diastolic_bp,
-                'heart_rate': heart_rate,
-                'spo2': spo2,
-                'temperature': temperature,
-                'respiratory_rate': respiratory_rate,
-                
-                # Laboratory Results
-                'lab_creatinine': lab_creatinine,
-                'lab_hemoglobin': lab_hemoglobin,
-                'lab_platelet_count': lab_platelet_count,
-                'lab_white_blood_cells': lab_white_blood_cells,
-                'lab_alt': lab_alt,
-                'lab_ast': lab_ast,
-                'lab_egfr': lab_egfr,
-                'lab_albumin': lab_albumin,
-                
-                # Comorbidities
-                'comorbidities': comorbidities,
-                'hypertension': 1 if hypertension else 0,
-                'diabetes': 1 if diabetes else 0,
-                'ckd': 1 if ckd else 0,
-                'cvd': 1 if cvd else 0,
-                'cancer': 1 if cancer else 0,
-                'copd': 1 if copd else 0,
-                'mental_health': 1 if mental_health else 0,
-                
-                # Medications
-                'selected_drugs': selected_drugs,
-                'medication_details': med_details,
-                
-                # Utilization / Admission History
-                'num_admissions': num_admissions,
-                'avg_los_days': avg_los_days,
-                'ever_died_in_hospital': ever_died_in_hospital,
-                'total_diagnoses': total_diagnoses,
-                'total_procedures': total_procedures,
-                'total_prescriptions': total_prescriptions,
-                'total_lab_tests': total_lab_tests,
-                'num_icu_stays': num_icu_stays,
-                'total_icu_los_days': total_icu_los_days,
-                'admission_type': admission_type,
-                'is_icu': 1 if is_icu else 0,
-                'current_los_days': current_los_days,
-            }
-            
-            # Use shared processing function
-            prediction = process_uploaded_patient_data(form_patient_data)
-            if prediction:
-                st.success(f"✅ Prediction complete! Risk Score: {prediction['risk_score']:.1%} ({prediction['risk_category']})")
-                st.info("Switch to 'ADR Predictions' tab to view all predictions.")
+
 
 
 def render_adr_predictions_tab():
@@ -2548,10 +2848,14 @@ def render_explainability_tab():
         st.subheader("Global Feature Importance")
         try:
             # Load feature importance
-            feature_names = pd.read_csv("data/output/X_features.csv").columns
+            feature_names = pd.read_csv("models/feature_template.csv").columns
+            # Correct way to get importance from Booster
+            importance_map = model.get_score(importance_type='gain')
+            feature_importance = [importance_map.get(f, 0) for f in feature_names]
+            
             importance_df = pd.DataFrame({
                 'Feature': feature_names,
-                'Importance': model.feature_importances_
+                'Importance': feature_importance
             }).sort_values('Importance', ascending=False)
             
             # Plot feature importance
@@ -2574,7 +2878,7 @@ def render_explainability_tab():
         st.subheader("Patient-Specific SHAP Analysis")
         try:
             # Prepare features (same as in prediction)
-            X_template = pd.read_csv("data/output/X_features.csv").iloc[0:1].copy()
+            X_template = pd.read_csv("models/feature_template.csv").iloc[0:1].copy()
             for col in X_template.columns:
                 X_template[col] = 0
             
@@ -2617,7 +2921,12 @@ def render_explainability_tab():
                 top_contributors = top_contributors_tuple[0] if isinstance(top_contributors_tuple, tuple) else top_contributors_tuple
                 
                 # Build clear explanation text
-                risk_proba = model.predict_proba(X_template)[0, 1]
+                # Fix: Use DMatrix for Booster and remove leakage
+                leakage = ['weak_score', 'high_risk_drug', 'faers_adr_rate', 'faers_severe_rate']
+                X_safe = X_template.drop(columns=[c for c in leakage if c in X_template.columns], errors='ignore')
+                
+                dtest = xgb.DMatrix(X_safe)
+                risk_proba = model.predict(dtest)[0]
                 risk_category = get_risk_category(risk_proba)
                 
                 # Get top contributing features
@@ -2730,20 +3039,211 @@ def render_dashboard():
     #     render_fhir_export_tab()
 
 
+
+# ============================================================================
+# NEW: AUTHENTICATION & ADMIN PAGES
+# ============================================================================
+
+def login_signup_interface():
+    """Render Login/Signup container"""
+    st.markdown("""
+        <style>
+            .auth-container { max-width: 400px; margin: 0 auto; padding: 2rem; background: white; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+            h1 { text-align: center; color: #1F2937; }
+        </style>
+    """, unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.title("🔐 AI-CPA Login")
+        
+        tab1, tab2 = st.tabs(["Login", "Sign Up"])
+        
+        with tab1:
+            with st.form("login_form"):
+                username = st.text_input("Username")
+                password = st.text_input("Password", type="password")
+                submitted = st.form_submit_button("Log In", use_container_width=True)
+                
+                if submitted:
+                    db = SessionLocal()
+                    user, msg = login_user(db, username, password)
+                    db.close()
+                    
+                    if user:
+                        st.session_state['user'] = user
+                        st.success(f"Welcome back, {user.username}!")
+                        st.rerun()
+                    else:
+                        st.error(msg)
+        
+        with tab2:
+            with st.form("signup_form"):
+                new_user = st.text_input("Choose Username")
+                new_pass = st.text_input("Choose Password", type="password")
+                # Admin secret code check (simple implementation)
+                admin_code = st.text_input("Admin Code (Optional)", type="password", help="Enter secret code to create admin account")
+                
+                submitted = st.form_submit_button("Create Account", use_container_width=True)
+                
+                if submitted:
+                    if new_user and new_pass:
+                        db = SessionLocal()
+                        role = 'admin' if admin_code == "medbot_admin_2024" else 'user'
+                        user, msg = signup_user(db, new_user, new_pass, role)
+                        db.close()
+                        
+                        if user:
+                            st.success("Account created! Please log in.")
+                        else:
+                            st.error(msg)
+                    else:
+                        st.warning("Please fill all fields.")
+
+def page_user_history():
+    """Display user's saved history"""
+    st.markdown('<div class="main-header">My Saved Reports</div>', unsafe_allow_html=True)
+    
+    if 'user' not in st.session_state:
+        st.error("Please login.")
+        return
+
+    db = SessionLocal()
+    records = db.query(PatientRecord).filter(PatientRecord.user_id == st.session_state['user'].id).order_by(PatientRecord.created_at.desc()).all()
+    db.close()
+    
+    if not records:
+        st.info("No saved reports found.")
+        return
+
+    for rec in records:
+        with st.expander(f"{rec.created_at.strftime('%Y-%m-%d %H:%M')} - {rec.risk_category} Risk ({rec.risk_score:.1%})"):
+            st.write(f"**Patient:** {rec.patient_name}")
+            col1, col2 = st.columns(2)
+            with col1:
+                st.json(rec.prediction_result_json) # Simplified view
+            with col2:
+                if st.button(f"Load to Dashboard #{rec.id}"):
+                    # Restore to session state
+                    import json
+                    st.session_state['patient_data'] = json.loads(rec.patient_data_json)
+                    st.session_state['current_page'] = 'dashboard'
+                    st.rerun()
+
+def page_admin_dashboard():
+    """Admin Dashboard to view all data"""
+    st.markdown('<div class="main-header">🛡️ Admin Dashboard</div>', unsafe_allow_html=True)
+    
+    if 'user' not in st.session_state or st.session_state['user'].role != 'admin':
+        st.error("Access Denied.")
+        return
+        
+    db = SessionLocal()
+    users = db.query(User).all()
+    records = db.query(PatientRecord).all()
+    db.close()
+    
+    st.metric("Total Users", len(users))
+    st.metric("Total Records Saved", len(records))
+    
+    st.subheader("All User Data")
+    
+    data = []
+    for r in records:
+        data.append({
+            "ID": r.id,
+            "User ID": r.user_id,
+            "Date": r.created_at,
+            "Risk": r.risk_score,
+            "Category": r.risk_category
+        })
+    
+    if data:
+        st.dataframe(pd.DataFrame(data))
+    else:
+        st.info("No records yet.")
+        
+    st.markdown("---")
+    st.subheader("🔧 Model Maintenance")
+    if st.button("🚀 Retrain Model on New Data"):
+        st.info("Training trigger sent... (Simulated)")
+        # In a real app, this would trigger a subprocess call to train_with_balancing.py
+        # subprocess.Popen(["python", "train_with_balancing.py"])
+        st.success("Model training initiated in background.")
+
+# ============================================================================
+# MAIN APP ROUTER
+# ============================================================================
+
 def main():
-    """Main application with landing + dashboard views"""
+    """Main application with Authentication Gate"""
+    
+    # 1. Check Authentication
+    if 'user' not in st.session_state:
+        # Show Login/Signup ONLY
+        login_signup_interface()
+        return
+
+    # 2. Get Page from Query Params
     try:
         params = st.query_params
         page_param = params.get("page", "landing")
-        page = page_param[0] if isinstance(page_param, list) else page_param
+        # Handle different Streamlit versions where query_params might return list or string
+        if isinstance(page_param, list):
+            current_page = page_param[0]
+        else:
+            current_page = page_param
     except Exception:
-        page = "landing"
+        current_page = "landing"
 
-    if page == "dashboard":
-        render_dashboard()
+    # 3. Routing Logic
+    if current_page == "dashboard":
+        # === DASHBOARD MODE ===
+        # Ensure sidebar is visible
+        st.markdown("""<style>[data-testid="stSidebar"] {display: block !important;}</style>""", unsafe_allow_html=True)
+        
+        user = st.session_state['user']
+        
+        # Sidebar for navigation
+        with st.sidebar:
+            st.title(f"👤 {user.username}")
+            st.caption(f"Role: {user.role.upper()}")
+            
+            if st.button("Log Out"):
+                del st.session_state['user']
+                st.query_params["page"] = "landing" # Reset param
+                st.rerun()
+                
+            st.markdown("---")
+            nav_options = ["Dashboard", "My History"]
+            if user.role == 'admin':
+                nav_options.append("Admin Panel")
+                
+            selected_page = st.radio("Navigate", nav_options)
+
+        # Render selected view
+        if selected_page == "Dashboard":
+            try:
+                render_dashboard()
+            except Exception as e:
+                st.error(f"Application Error: {e}")
+                st.exception(e)
+                
+        elif selected_page == "My History":
+            page_user_history()
+            
+        elif selected_page == "Admin Panel":
+            page_admin_dashboard()
+            
     else:
+        # === LANDING PAGE MODE ===
+        # Ensure sidebar is HIDDEN for full landing page experience
+        st.markdown("""<style>[data-testid="stSidebar"] {display: none !important;}</style>""", unsafe_allow_html=True)
+        
+        # Render the original landing page
         page_patient_entry()
 
 
 if __name__ == "__main__":
     main()
+

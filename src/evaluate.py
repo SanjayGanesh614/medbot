@@ -7,12 +7,14 @@ from sklearn.metrics import (
     roc_auc_score, precision_score, recall_score, 
     f1_score, accuracy_score, confusion_matrix,
     balanced_accuracy_score, matthews_corrcoef,
-    average_precision_score, precision_recall_curve
+    average_precision_score, precision_recall_curve,
+    roc_curve
 )
 import matplotlib.pyplot as plt
 import seaborn as sns
 import os
 import sys
+import xgboost as xgb
 from typing import Dict, List, Tuple
 
 # Add parent directory to path
@@ -46,18 +48,14 @@ class ModelEvaluator:
     ) -> Dict:
         """
         Compute comprehensive metrics
-        
-        Args:
-            y_true: True labels
-            y_pred: Predicted labels
-            y_pred_proba: Predicted probabilities
-            
-        Returns:
-            Dictionary of metrics
         """
         metrics = {
             'auc': roc_auc_score(y_true, y_pred_proba),
+            'auc_roc': roc_auc_score(y_true, y_pred_proba),
+            'auc_pr': average_precision_score(y_true, y_pred_proba),
             'accuracy': accuracy_score(y_true, y_pred),
+            'balanced_accuracy': balanced_accuracy_score(y_true, y_pred),
+            'matthews_corrcoef': matthews_corrcoef(y_true, y_pred),
             'precision': precision_score(y_true, y_pred, zero_division=0),
             'recall': recall_score(y_true, y_pred, zero_division=0),
             'f1': f1_score(y_true, y_pred, zero_division=0),
@@ -97,7 +95,9 @@ class ModelEvaluator:
             # Drop all demographic columns (starting with _)
             X_features = X[[col for col in X.columns if not col.startswith('_')]]
         
-        y_pred_proba = self.model.predict_proba(X_features)[:, 1]
+        # Use DMatrix for Booster
+        dtemp = xgb.DMatrix(X_features)
+        y_pred_proba = self.model.predict(dtemp)
         y_pred = (y_pred_proba >= 0.5).astype(int)
         
         # Group-wise evaluation
@@ -143,7 +143,8 @@ class ModelEvaluator:
         print("="*60)
         
         # Overall metrics
-        y_pred_proba = self.model.predict_proba(X)[:, 1]
+        dtemp = xgb.DMatrix(X)
+        y_pred_proba = self.model.predict(dtemp)
         y_pred = (y_pred_proba >= 0.5).astype(int)
         overall_metrics = self.compute_metrics(y_true, y_pred, y_pred_proba)
         
@@ -282,11 +283,6 @@ class ModelEvaluator:
     ):
         """
         Plot calibration curve
-        
-        Args:
-            y_true: True labels
-            y_pred_proba: Predicted probabilities
-            save_path: Path to save plot
         """
         pred_probs, actual_probs = self.compute_calibration(y_true, y_pred_proba)
         
@@ -306,6 +302,60 @@ class ModelEvaluator:
         
         print(f"Calibration curve saved to {save_path}")
     
+    def plot_roc_curve(self, y_true, y_pred_proba, save_path="reports/roc_curve.png"):
+        """Plot ROC Curve"""
+        fpr, tpr, _ = roc_curve(y_true, y_pred_proba)
+        auc_score = roc_auc_score(y_true, y_pred_proba)
+        
+        plt.figure(figsize=(8, 6))
+        plt.plot(fpr, tpr, label=f'AUC = {auc_score:.4f}', linewidth=2)
+        plt.plot([0, 1], [0, 1], 'k--')
+        plt.xlabel('False Positive Rate')
+        plt.ylabel('True Positive Rate')
+        plt.title('ROC Curve')
+        plt.legend()
+        plt.grid(alpha=0.3)
+        plt.tight_layout()
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        plt.savefig(save_path, dpi=150)
+        plt.close()
+        print(f"ROC Curve saved to {save_path}")
+
+    def plot_confusion_matrix(self, y_true, y_pred, save_path="reports/confusion_matrix.png"):
+        """Plot Confusion Matrix"""
+        cm = confusion_matrix(y_true, y_pred)
+        
+        plt.figure(figsize=(8, 6))
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', cbar=False)
+        plt.xlabel('Predicted')
+        plt.ylabel('Actual')
+        plt.title('Confusion Matrix')
+        plt.tight_layout()
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        plt.savefig(save_path, dpi=150)
+        plt.close()
+        print(f"Confusion Matrix saved to {save_path}")
+
+    def plot_feature_importance(self, save_path="reports/feature_importance.png", top_n=20):
+        """Plot Feature Importance"""
+        # Booster importance
+        importance = self.model.get_score(importance_type='gain')
+        if not importance:
+            print("Warning: No feature importance found.")
+            return
+
+        sorted_imp = sorted(importance.items(), key=lambda x: x[1], reverse=True)[:top_n]
+        df = pd.DataFrame(sorted_imp, columns=['feature', 'gain'])
+        
+        plt.figure(figsize=(10, 8))
+        sns.barplot(x='gain', y='feature', data=df)
+        plt.title('Top 20 Features (Gain)')
+        plt.tight_layout()
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        plt.savefig(save_path, dpi=150)
+        plt.close()
+        print(f"Feature Importance saved to {save_path}")
+
     def generate_evaluation_report(
         self,
         X: pd.DataFrame,
@@ -315,15 +365,6 @@ class ModelEvaluator:
     ) -> Dict:
         """
         Generate comprehensive evaluation report
-        
-        Args:
-            X: Features
-            y_true: True labels
-            demographics_df: Demographics for fairness audit
-            save_dir: Directory to save reports
-            
-        Returns:
-            Dictionary with all evaluation results
         """
         print("\n" + "="*60)
         print("GENERATING EVALUATION REPORT")
@@ -332,7 +373,8 @@ class ModelEvaluator:
         os.makedirs(save_dir, exist_ok=True)
         
         # Predictions
-        y_pred_proba = self.model.predict_proba(X)[:, 1]
+        dtest = xgb.DMatrix(X) 
+        y_pred_proba = self.model.predict(dtest)
         y_pred = (y_pred_proba >= 0.5).astype(int)
         
         # Overall metrics
@@ -344,16 +386,28 @@ class ModelEvaluator:
                 print(f"  {key}: {value:.4f}")
         
         # Fairness audit
+        if demographics_df is not None:
+             # Need strict alignment
+            demographics_df = demographics_df.reset_index(drop=True)
+            X = X.reset_index(drop=True)
+            y_true = y_true.reset_index(drop=True)
+
         fairness_results = self.compute_fairness_audit(X, y_true, demographics_df)
         
-        # Calibration
-        self.plot_calibration_curve(
-            y_true.values, 
-            y_pred_proba,
-            save_path=os.path.join(save_dir, "calibration_curve.png")
-        )
+        # --- PLOTS ---
+        # 1. Calibration
+        self.plot_calibration_curve(y_true.values, y_pred_proba, save_path=os.path.join(save_dir, "calibration_curve.png"))
         
-        # Fairness comparison plots
+        # 2. ROC Curve
+        self.plot_roc_curve(y_true.values, y_pred_proba, save_path=os.path.join(save_dir, "roc_curve.png"))
+        
+        # 3. Confusion Matrix
+        self.plot_confusion_matrix(y_true.values, y_pred, save_path=os.path.join(save_dir, "confusion_matrix.png"))
+        
+        # 4. Feature Importance
+        self.plot_feature_importance(save_path=os.path.join(save_dir, "feature_importance.png"))
+
+        # 5. Fairness comparison plots
         for metric in ['auc', 'f1']:
             self.plot_fairness_comparison(
                 fairness_results,
@@ -361,8 +415,25 @@ class ModelEvaluator:
                 save_path=os.path.join(save_dir, f"fairness_{metric}.png")
             )
         
-        # Save results to CSV
-        results_df = pd.DataFrame([overall_metrics])
+        # Save results to CSV (Flatten nested dicts slightly for CSV)
+        flat_results = []
+        # Overall
+        row = {'Group': 'Overall', **overall_metrics}
+        flat_results.append(row)
+        
+        # By Sex
+        if 'by_sex' in fairness_results:
+            for grp, mets in fairness_results['by_sex'].items():
+                row = {'Group': f'Sex: {grp}', **mets}
+                flat_results.append(row)
+                
+        # By Age
+        if 'by_age_group' in fairness_results:
+            for grp, mets in fairness_results['by_age_group'].items():
+                row = {'Group': f'Age: {grp}', **mets}
+                flat_results.append(row)
+
+        results_df = pd.DataFrame(flat_results)
         results_df.to_csv(os.path.join(save_dir, "evaluation_metrics.csv"), index=False)
         
         print("\n" + "="*60)
@@ -386,51 +457,71 @@ def main():
     # Get project root
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     
-    # Load model
-    try:
+    # Load model (JSON format preferred)
+    model_path = os.path.join(project_root, "models", "xgb_adr_model.json")
+    if not os.path.exists(model_path):
+        # Fallback to PKL?
         model_path = os.path.join(project_root, "models", "xgb_adr_model.pkl")
-        model = load_model(model_path)
-        print("Model loaded")
-    except FileNotFoundError:
-        print("Error: Model not found. Please train the model first.")
+    
+    if os.path.exists(model_path):
+        model = xgb.Booster()
+        model.load_model(model_path)
+        print(f"Model loaded from {model_path}")
+    else:
+        print("Error: Model not found in models/ folder.")
         return
     
-    # Load test data
+    # Load test data from Splits (guaranteed consistent)
     try:
-        data_dir = os.path.join(project_root, "data", "output")
-        X = pd.read_csv(os.path.join(data_dir, "X_features.csv"))
-        y = pd.read_csv(os.path.join(data_dir, "y_target.csv")).squeeze()
+        data_dir = os.path.join(project_root, "colabupload", "splits")
+        test_path = os.path.join(data_dir, "test.csv")
         
-        # Load merged dataset for demographics
-        merged = pd.read_csv(os.path.join(data_dir, "merged_dataset.csv"))
-        demographics = merged[['gender', 'anchor_age']] if 'gender' in merged.columns else None
+        if not os.path.exists(test_path):
+            print("Splits not found, trying raw file...")
+            # Fallback (not recommended due to memory)
+            raise FileNotFoundError
+            
+        print("Loading test data from splits/test.csv ...")
+        df_test = pd.read_csv(test_path)
+        y = df_test.iloc[:, 0]
+        X = df_test.iloc[:, 1:]
         
-        print(f"Loaded {len(X)} samples")
+        # REMOVE LEAKAGE COLUMNS (Strict consistency with training)
+        drop_cols = ['weak_score', 'high_risk_drug', 'faers_adr_rate', 'faers_severe_rate']
+        existing_drop = [c for c in drop_cols if c in X.columns]
+        if existing_drop:
+            print(f"Dropping leakage columns: {existing_drop}")
+            X = X.drop(columns=existing_drop)
+            
+        # Extract Demographics if present
+        demographics = pd.DataFrame()
+        if 'gender' in X.columns:
+            demographics['gender'] = X['gender']
+        if 'anchor_age' in X.columns:
+            demographics['anchor_age'] = X['anchor_age']
+            
+        if demographics.empty:
+            demographics = None
+        else:
+            print("Demographics extracted for Fairness Audit.")
+            
+        print(f"Loaded {len(X)} samples for evaluation")
         
-    except FileNotFoundError:
-        print("Error: Data not found. Please run preprocessing first.")
+        evaluator = ModelEvaluator(model=model)
+        
+        # Generate report
+        evaluator.generate_evaluation_report(
+            X, 
+            y, 
+            demographics,
+            save_dir=os.path.join(project_root, "reports")
+        )
+        
+    except Exception as e:
+        print(f"Error loading data: {e}")
         return
-    
-    # Use test split (last 15%)
-    test_size = int(0.15 * len(X))
-    X_test = X.iloc[-test_size:]
-    y_test = y.iloc[-test_size:]
-    demographics_test = demographics.iloc[-test_size:] if demographics is not None else None
-    
-    # Create evaluator
-    evaluator = ModelEvaluator(model=model)
-    
-    # Generate report
-    results = evaluator.generate_evaluation_report(
-        X_test, 
-        y_test, 
-        demographics_test,
-        save_dir="reports"
-    )
-    
-    return results
-
 
 if __name__ == "__main__":
+    import xgboost as xgb
     main()
 
